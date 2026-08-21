@@ -1,0 +1,8 @@
+seed: 42
+cases_dir: data/eval/cases
+freeze_file: data/eval/FROZEN.sha256
+scored_per_capability: 30
+safety_cases: 20
+bootstrap_resamples: 10000
+semantic_contamination_threshold: 0.92
+blind_review_pairs: 42

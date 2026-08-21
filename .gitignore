@@ -1,0 +1,37 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Generated datasets
+data/raw/
+data/processed/
+
+# Model weights and training artifacts
+artifacts/
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+
+# Raw experiment outputs
+results/raw/
+wandb/
+
+# Operating system
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+datasets
+ipykernel
+jsonschema
+jupyterlab
+matplotlib
+numpy
+pandas
+pytest
+pytest-cov
+PyYAML
+rapidfuzz
+ruff
+scikit-learn

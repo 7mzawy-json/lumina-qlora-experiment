@@ -1,0 +1,112 @@
+[
+  {
+    "message_id": "assistant-solar-b",
+    "parent_id": "root-solar",
+    "message_tree_id": "tree-001",
+    "role": "assistant",
+    "lang": "en",
+    "text": "Electricity generation and water heating.",
+    "rank": 0,
+    "deleted": false
+  },
+  {
+    "message_id": "root-solar",
+    "parent_id": null,
+    "message_tree_id": "tree-001",
+    "role": "prompter",
+    "lang": "en",
+    "text": "Give two uses of solar energy.",
+    "rank": null,
+    "deleted": false
+  },
+  {
+    "message_id": "assistant-solar-a",
+    "parent_id": "root-solar",
+    "message_tree_id": "tree-001",
+    "role": "assistant",
+    "lang": "en",
+    "text": "Solar power can generate electricity and heat water.",
+    "rank": 0,
+    "deleted": false
+  },
+  {
+    "message_id": "assistant-solar-low",
+    "parent_id": "root-solar",
+    "message_tree_id": "tree-001",
+    "role": "assistant",
+    "lang": "en",
+    "text": "It is useful.",
+    "rank": 2,
+    "deleted": false
+  },
+  {
+    "message_id": "root-general",
+    "parent_id": null,
+    "message_tree_id": "tree-002",
+    "role": "prompter",
+    "lang": "en",
+    "text": "Say hello politely.",
+    "rank": null,
+    "deleted": false
+  },
+  {
+    "message_id": "assistant-general",
+    "parent_id": "root-general",
+    "message_tree_id": "tree-002",
+    "role": "assistant",
+    "lang": "en",
+    "text": "Hello, it is a pleasure to meet you.",
+    "rank": 0,
+    "deleted": false
+  },
+  {
+    "message_id": "root-code",
+    "parent_id": null,
+    "message_tree_id": "tree-003",
+    "role": "prompter",
+    "lang": "en",
+    "text": "Write a Python function that adds two integers.",
+    "rank": null,
+    "deleted": false
+  },
+  {
+    "message_id": "assistant-code-deleted",
+    "parent_id": "root-code",
+    "message_tree_id": "tree-003",
+    "role": "assistant",
+    "lang": "en",
+    "text": "Deleted response.",
+    "rank": 0,
+    "deleted": true
+  },
+  {
+    "message_id": "assistant-code",
+    "parent_id": "root-code",
+    "message_tree_id": "tree-003",
+    "role": "assistant",
+    "lang": "en",
+    "text": "def add(a, b):\n    return a + b",
+    "rank": 1,
+    "deleted": false
+  },
+  {
+    "message_id": "root-turkish",
+    "parent_id": null,
+    "message_tree_id": "tree-004",
+    "role": "prompter",
+    "lang": "tr",
+    "text": "Merhaba de.",
+    "rank": null,
+    "deleted": false
+  },
+  {
+    "message_id": "assistant-turkish",
+    "parent_id": "root-turkish",
+    "message_tree_id": "tree-004",
+    "role": "assistant",
+    "lang": "tr",
+    "text": "Merhaba.",
+    "rank": 0,
+    "deleted": false
+  }
+]

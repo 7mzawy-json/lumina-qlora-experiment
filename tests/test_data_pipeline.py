@@ -198,10 +198,41 @@ def test_fixture_only_cli_produces_stable_hashes(
     )
     fixture_path = tmp_path / "oasst.json"
     fixture_path.write_text(json.dumps(oasst_rows), encoding="utf-8")
+    evaluation_path = tmp_path / "evaluation.jsonl"
+    evaluation_rows = [
+        {
+            "id": "eval-general",
+            "capability": "instruction",
+            "prompt": "Say hello politely.",
+            "scorer": "constraint",
+        },
+        {
+            "id": "eval-solar",
+            "capability": "knowledge",
+            "prompt": "Give two uses of solar energy.",
+            "scorer": "rubric",
+        },
+        {
+            "id": "eval-code",
+            "capability": "programming",
+            "prompt": "Write a Python function that adds two integers.",
+            "scorer": "python_syntax",
+        },
+    ]
+    evaluation_path.write_text(
+        "".join(f"{json.dumps(row)}\n" for row in evaluation_rows), encoding="utf-8"
+    )
 
     output_one = tmp_path / "first"
     output_two = tmp_path / "second"
-    args = ["--config", str(config_path), "--oasst-json", str(fixture_path)]
+    args = [
+        "--config",
+        str(config_path),
+        "--oasst-json",
+        str(fixture_path),
+        "--evaluation-cases",
+        str(evaluation_path),
+    ]
     assert prepare_main([*args, "--output", str(output_one)]) == 0
     assert prepare_main([*args, "--output", str(output_two)]) == 0
 
@@ -210,6 +241,31 @@ def test_fixture_only_cli_produces_stable_hashes(
     assert first_manifest["accepted_sha256"] == second_manifest["accepted_sha256"]
     assert first_manifest["rejections_sha256"] == second_manifest["rejections_sha256"]
     assert first_manifest["dataset_revision"] == "fixture-revision"
+
+    train_rows = [
+        json.loads(line)
+        for line in (output_one / "train.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    validation_rows = [
+        json.loads(line)
+        for line in (output_one / "validation.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert (len(train_rows), len(validation_rows)) == (2, 1)
+    assert {row["cluster_id"] for row in train_rows}.isdisjoint(
+        {row["cluster_id"] for row in validation_rows}
+    )
+    assert first_manifest["train_sha256"] == second_manifest["train_sha256"]
+    assert first_manifest["validation_sha256"] == second_manifest["validation_sha256"]
+    assert first_manifest["contamination_hit_count"] == 2
+    contamination_rows = [
+        row
+        for row in (output_one / "contamination-review.csv")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if row.strip()
+    ]
+    assert len(contamination_rows) == 3
+    assert all(",True," in row for row in contamination_rows[1:])
 
     accepted_rows = [
         json.loads(line)

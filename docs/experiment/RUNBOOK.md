@@ -34,6 +34,12 @@ The archive must contain `accepted.jsonl`, `train.jsonl`, `validation.jsonl`, `r
 
 ## Colab setup and data import
 
+The GPU requirements include the Python 3.13 compatibility overlay
+`jedi==0.20.0` and `pyarrow==25.0.0`. The notebook installs the exact pinned
+requirements with `--no-deps` to preserve Colab's CUDA PyTorch, then runs
+`pip check` as a fail-closed gate. Any `pip check` failure stops the run; do not
+use a manual, unrecorded package-install workaround.
+
 1. Select a GPU runtime. An L4, A10G, RTX 4090, or another 24 GB GPU is preferred; record a T4 fallback as a deviation.
 2. In Colab Secrets, add `GITHUB_REPOSITORY`, `GITHUB_COMMIT`, a read-only `GITHUB_TOKEN` authorized for the private repository, and `HF_TOKEN` (the secret name is exactly `HF_TOKEN`). Set `GITHUB_COMMIT` to the exact 40-character SHA of the commit just pushed for this run; it must not be a branch name or `HEAD`. Until this launch-boundary fix is committed, the required SHA is `22feb06215bfea551f5e8697f3e337e1062e075c`; after committing the fix, replace it with that just-pushed commit SHA. Enter all secret values directly in the Colab Secrets UI, never in chat or logs. Never print a secret or place one in a notebook output.
 3. Upload/open `notebooks/lumina_qlora_demo.ipynb`. Run the dependency/repository cell, restart after dependency installation, then rerun from repository verification.

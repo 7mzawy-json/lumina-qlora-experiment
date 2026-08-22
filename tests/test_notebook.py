@@ -6,6 +6,7 @@ import nbformat
 from scripts.build_notebook import build_notebook
 
 NOTEBOOK_PATH = Path("notebooks/lumina_qlora_demo.ipynb")
+GPU_REQUIREMENTS_PATH = Path("requirements-gpu.txt")
 
 
 def test_notebook_has_ordered_evidence_gates() -> None:
@@ -115,6 +116,39 @@ def test_notebook_verifies_freezes_and_preserves_colab_torch() -> None:
     assert '"--no-deps"' in source
     assert "torch_before" in source
     assert "torch_after" in source
+
+
+def test_gpu_requirements_include_python_313_compatibility_pins_under_no_deps_install() -> None:
+    requirements = GPU_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines()
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    assert "jedi==0.20.0" in requirements
+    assert "pyarrow==25.0.0" in requirements
+    assert (
+        '[sys.executable, "-m", "pip", "install", "--no-deps", "-r", "requirements-gpu.txt"]'
+        in source
+    )
+
+
+def test_notebook_records_every_direct_gpu_requirement_version_in_manifests() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    expected_packages = (
+        "accelerate",
+        "bitsandbytes",
+        "datasets",
+        "jedi",
+        "peft",
+        "pyarrow",
+        "transformers",
+        "trl",
+        "torch",
+    )
+    package_versions_source = source[
+        source.index("package_versions = {") : source.index('print({"gpu"')
+    ]
+    for package in expected_packages:
+        assert f'"{package}"' in package_versions_source
 
 
 def test_notebook_imports_the_verified_processed_archive_before_smoke_work() -> None:

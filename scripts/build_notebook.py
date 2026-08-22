@@ -122,7 +122,17 @@ from lumina_experiment.gpu import probe_gpu
 gpu = probe_gpu()
 package_versions = {
     package: version(package)
-    for package in ("torch", "transformers", "trl", "peft", "bitsandbytes")
+    for package in (
+        "accelerate",
+        "bitsandbytes",
+        "datasets",
+        "jedi",
+        "peft",
+        "pyarrow",
+        "transformers",
+        "trl",
+        "torch",
+    )
 }
 print({"gpu": gpu.to_dict(), "python": sys.version.split()[0], "packages": package_versions})"""
         ),

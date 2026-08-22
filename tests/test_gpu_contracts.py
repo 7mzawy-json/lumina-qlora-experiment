@@ -120,6 +120,8 @@ def test_smoke_record_limit_bounds_both_training_splits() -> None:
 
 def test_assistant_mask_preflight_uses_trl_training_template(monkeypatch) -> None:
     class QwenTokenizer:
+        chat_template = "raw-qwen3-template"
+
         def apply_chat_template(
             self,
             _messages,
@@ -140,12 +142,181 @@ def test_assistant_mask_preflight_uses_trl_training_template(monkeypatch) -> Non
     chat_template_utils.get_training_chat_template = lambda _tokenizer: (
         "trl-qwen3-training-template"
     )
+    chat_template_utils.qwen3_training_chat_template = "unused-qwen3-fallback-template"
     trl = ModuleType("trl")
     trl.chat_template_utils = chat_template_utils
     monkeypatch.setitem(sys.modules, "trl", trl)
     monkeypatch.setitem(sys.modules, "trl.chat_template_utils", chat_template_utils)
 
-    _assert_assistant_generation_mask(QwenTokenizer(), instruction_record("mask", 0))
+    tokenizer = QwenTokenizer()
+
+    _assert_assistant_generation_mask(
+        tokenizer,
+        instruction_record("mask", 0),
+        model_id="Other/Compatible-Model",
+        model_revision="a" * 40,
+    )
+
+    assert tokenizer.chat_template == "trl-qwen3-training-template"
+
+
+def test_assistant_mask_preflight_handles_pinned_legacy_qwen3_template(monkeypatch) -> None:
+    class LegacyQwenTokenizer:
+        name_or_path = "Qwen/Qwen3-0.6B-Base"
+        chat_template = "legacy-qwen3-template"
+
+        def apply_chat_template(
+            self,
+            _messages,
+            *,
+            tokenize,
+            return_dict,
+            return_assistant_tokens_mask,
+            chat_template=None,
+        ):
+            assert tokenize is True
+            assert return_dict is True
+            assert return_assistant_tokens_mask is True
+            if chat_template == "trl-qwen3-fallback-template":
+                return {"assistant_masks": [0, 1, 1]}
+            return {"assistant_masks": [0, 0, 0]}
+
+    def reject_legacy_template(_tokenizer):
+        raise ValueError(
+            "The chat template is not training-compatible (missing prefix-preservation or "
+            "`{% generation %}` markers) and patching is not supported for this template. "
+            "Please manually modify the chat template for training."
+        )
+
+    chat_template_utils = ModuleType("trl.chat_template_utils")
+    chat_template_utils.get_training_chat_template = reject_legacy_template
+    chat_template_utils.qwen3_training_chat_template = "trl-qwen3-fallback-template"
+    trl = ModuleType("trl")
+    trl.chat_template_utils = chat_template_utils
+    monkeypatch.setitem(sys.modules, "trl", trl)
+    monkeypatch.setitem(sys.modules, "trl.chat_template_utils", chat_template_utils)
+    model_id = "Qwen/Test-Legacy-Base"
+    model_revision = "a" * 40
+    monkeypatch.setattr(
+        gpu_runtime,
+        "_QWEN3_LEGACY_TEMPLATE_PROVENANCE",
+        {(model_id, model_revision): hashlib.sha256(b"legacy-qwen3-template").hexdigest()},
+    )
+
+    tokenizer = LegacyQwenTokenizer()
+
+    _assert_assistant_generation_mask(
+        tokenizer,
+        instruction_record("mask", 0),
+        model_id=model_id,
+        model_revision=model_revision,
+    )
+
+    assert tokenizer.chat_template == "trl-qwen3-fallback-template"
+
+
+def test_assistant_mask_preflight_rejects_unsupported_legacy_template(monkeypatch) -> None:
+    class UnsupportedTokenizer:
+        name_or_path = "Other/Unsupported-Base"
+        chat_template = "unsupported-template"
+
+        def apply_chat_template(self, *_args, **_kwargs):
+            return {"assistant_masks": [0, 1]}
+
+    def reject_legacy_template(_tokenizer):
+        raise ValueError("patching is not supported for this template")
+
+    chat_template_utils = ModuleType("trl.chat_template_utils")
+    chat_template_utils.get_training_chat_template = reject_legacy_template
+    chat_template_utils.qwen3_training_chat_template = "trl-qwen3-fallback-template"
+    trl = ModuleType("trl")
+    trl.chat_template_utils = chat_template_utils
+    monkeypatch.setitem(sys.modules, "trl", trl)
+    monkeypatch.setitem(sys.modules, "trl.chat_template_utils", chat_template_utils)
+    tokenizer = UnsupportedTokenizer()
+
+    with pytest.raises(ValueError, match="patching is not supported"):
+        _assert_assistant_generation_mask(
+            tokenizer,
+            instruction_record("mask", 0),
+            model_id="Other/Unsupported-Base",
+            model_revision="b" * 40,
+        )
+
+    assert tokenizer.chat_template == "unsupported-template"
+
+
+def test_assistant_mask_preflight_rejects_changed_allowlisted_qwen3_template(
+    monkeypatch,
+) -> None:
+    class ChangedQwenTokenizer:
+        chat_template = "changed-or-corrupted-template"
+
+        def apply_chat_template(self, *_args, **_kwargs):
+            return {"assistant_masks": [0, 1]}
+
+    def reject_legacy_template(_tokenizer):
+        raise ValueError(
+            "The chat template is not training-compatible (missing prefix-preservation or "
+            "`{% generation %}` markers) and patching is not supported for this template. "
+            "Please manually modify the chat template for training."
+        )
+
+    chat_template_utils = ModuleType("trl.chat_template_utils")
+    chat_template_utils.get_training_chat_template = reject_legacy_template
+    chat_template_utils.qwen3_training_chat_template = "trl-qwen3-fallback-template"
+    trl = ModuleType("trl")
+    trl.chat_template_utils = chat_template_utils
+    monkeypatch.setitem(sys.modules, "trl", trl)
+    monkeypatch.setitem(sys.modules, "trl.chat_template_utils", chat_template_utils)
+    tokenizer = ChangedQwenTokenizer()
+
+    with pytest.raises(ValueError, match="patching is not supported"):
+        _assert_assistant_generation_mask(
+            tokenizer,
+            instruction_record("mask", 0),
+            model_id="Qwen/Qwen3-0.6B-Base",
+            model_revision="da87bfb608c14b7cf20ba1ce41287e8de496c0cd",
+        )
+
+    assert tokenizer.chat_template == "changed-or-corrupted-template"
+
+
+def test_assistant_mask_preflight_rejects_unexpected_helper_error(monkeypatch) -> None:
+    class LegacyQwenTokenizer:
+        chat_template = "verified-legacy-template"
+
+        def apply_chat_template(self, *_args, **_kwargs):
+            return {"assistant_masks": [0, 1]}
+
+    def reject_for_another_reason(_tokenizer):
+        raise ValueError("a different TRL validation failed")
+
+    chat_template_utils = ModuleType("trl.chat_template_utils")
+    chat_template_utils.get_training_chat_template = reject_for_another_reason
+    chat_template_utils.qwen3_training_chat_template = "trl-qwen3-fallback-template"
+    trl = ModuleType("trl")
+    trl.chat_template_utils = chat_template_utils
+    monkeypatch.setitem(sys.modules, "trl", trl)
+    monkeypatch.setitem(sys.modules, "trl.chat_template_utils", chat_template_utils)
+    model_id = "Qwen/Test-Legacy-Base"
+    model_revision = "c" * 40
+    monkeypatch.setattr(
+        gpu_runtime,
+        "_QWEN3_LEGACY_TEMPLATE_PROVENANCE",
+        {(model_id, model_revision): hashlib.sha256(b"verified-legacy-template").hexdigest()},
+    )
+    tokenizer = LegacyQwenTokenizer()
+
+    with pytest.raises(ValueError, match="different TRL validation"):
+        _assert_assistant_generation_mask(
+            tokenizer,
+            instruction_record("mask", 0),
+            model_id=model_id,
+            model_revision=model_revision,
+        )
+
+    assert tokenizer.chat_template == "verified-legacy-template"
 
 
 def test_generation_config_is_deterministic() -> None:

@@ -29,6 +29,21 @@ FROZEN_EVALUATION_FILE = REPO_ROOT / "data" / "eval" / "FROZEN.sha256"
 FROZEN_EVALUATION_CASES = REPO_ROOT / "data" / "eval" / "cases"
 FROZEN_EVALUATION_SOURCES = REPO_ROOT / "data" / "eval" / "sources.yaml"
 SYSTEM_PROMPT = "You are Lumina, a precise and helpful assistant."
+_QWEN3_LEGACY_TEMPLATE_PROVENANCE = {
+    (
+        "Qwen/Qwen3-0.6B-Base",
+        "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",
+    ): "87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5",
+    (
+        "Qwen/Qwen3-8B-Base",
+        "49e3418fbbbca6ecbdf9608b4d22e5a407081db4",
+    ): "87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5",
+}
+_TRL_UNSUPPORTED_TEMPLATE_ERROR = (
+    "The chat template is not training-compatible (missing prefix-preservation or "
+    "`{% generation %}` markers) and patching is not supported for this template. "
+    "Please manually modify the chat template for training."
+)
 
 
 @dataclass(frozen=True)
@@ -290,10 +305,33 @@ def _load_model_and_tokenizer(config: ExperimentConfig, revision: str, runtime: 
     return model, tokenizer
 
 
-def _assert_assistant_generation_mask(tokenizer, record: InstructionRecord) -> None:
-    from trl.chat_template_utils import get_training_chat_template
+def _assert_assistant_generation_mask(
+    tokenizer,
+    record: InstructionRecord,
+    *,
+    model_id: str,
+    model_revision: str,
+) -> None:
+    from trl.chat_template_utils import (
+        get_training_chat_template,
+        qwen3_training_chat_template,
+    )
 
-    training_chat_template = get_training_chat_template(tokenizer)
+    try:
+        training_chat_template = get_training_chat_template(tokenizer)
+    except ValueError as error:
+        raw_template = getattr(tokenizer, "chat_template", None)
+        expected_hash = _QWEN3_LEGACY_TEMPLATE_PROVENANCE.get((model_id, model_revision))
+        if (
+            str(error) != _TRL_UNSUPPORTED_TEMPLATE_ERROR
+            or not isinstance(raw_template, str)
+            or expected_hash is None
+            or _sha256(raw_template) != expected_hash
+        ):
+            raise
+        training_chat_template = qwen3_training_chat_template
+    if training_chat_template is not None:
+        tokenizer.chat_template = training_chat_template
     rendered = tokenizer.apply_chat_template(
         [{"role": message.role, "content": message.content} for message in record.messages],
         tokenize=True,
@@ -360,7 +398,12 @@ def train_adapter(
     torch.cuda.reset_peak_memory_stats()
 
     model, tokenizer = _load_model_and_tokenizer(config, resolved_revision, runtime)
-    _assert_assistant_generation_mask(tokenizer, training_datasets.train[0])
+    _assert_assistant_generation_mask(
+        tokenizer,
+        training_datasets.train[0],
+        model_id=config.model_id,
+        model_revision=resolved_revision,
+    )
     lora = LoraConfig(
         r=config.lora_rank,
         lora_alpha=config.lora_alpha,

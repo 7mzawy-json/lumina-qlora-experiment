@@ -39,6 +39,68 @@ def test_notebook_keeps_github_token_in_headers_and_out_of_artifacts() -> None:
     assert not re.search(r"(?:ghp_|github_pat_|hf_)[A-Za-z0-9]{20,}", source)
 
 
+def test_notebook_requires_all_colab_secrets_and_wires_hf_token_only_in_memory() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    for secret_name in ("GITHUB_REPOSITORY", "GITHUB_COMMIT", "GITHUB_TOKEN", "HF_TOKEN"):
+        assert f'userdata.get("{secret_name}")' in source
+    assert 'hf_token = userdata.get("HF_TOKEN")' in source
+    assert "not hf_token or not hf_token.strip()" in source
+    assert 'os.environ["HF_TOKEN"] = hf_token' in source
+    assert "del hf_token" in source
+    assert "HUGGINGFACE_HUB_TOKEN" not in source
+    assert (
+        "hf_token"
+        not in source[
+            source.index("del hf_token") + len("del hf_token") : source.index(
+                "RUN_ABLATION = False"
+            )
+        ]
+    )
+
+
+def test_notebook_uses_only_requested_verified_immutable_commit_for_archive_download() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    assert 're.fullmatch(r"[0-9a-fA-F]{40}", requested_commit)' in source
+    assert 'requested_commit = userdata.get("GITHUB_COMMIT")' in source
+    assert (
+        'f"https://api.github.com/repos/{github_repository}/commits/{requested_commit}"' in source
+    )
+    assert 'verified_commit = commit_response.json()["sha"]' in source
+    assert "verified_commit != requested_commit" in source
+    assert 'f"https://api.github.com/repos/{github_repository}/zipball/{verified_commit}"' in source
+    assert "/commits/HEAD" not in source
+    assert "/zipball/{repository_commit}" not in source
+
+
+def test_notebook_clears_hf_token_environment_before_export_archive_is_constructed() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    cleanup = 'os.environ.pop("HF_TOKEN", None)'
+    archive = 'archive_path = Path("/content/lumina-results.zip")'
+    assert cleanup in source
+    assert source.index(cleanup) < source.index(archive)
+    ablation = "RUN_ABLATION = False"
+    assert "hf_token" not in source[source.index(archive) : source.index(ablation)]
+
+
+def test_notebook_rehydrates_hf_token_only_in_enabled_ablation_and_finally_clears_it() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    ablation = source[source.index("RUN_ABLATION = False") :]
+    assert "RUN_ABLATION = False" in ablation
+    assert 'if RUN_ABLATION:\n    ablation_hf_token = userdata.get("HF_TOKEN")' in ablation
+    assert "if not ablation_hf_token or not ablation_hf_token.strip():" in ablation
+    assert 'os.environ["HF_TOKEN"] = ablation_hf_token' in ablation
+    assert "del ablation_hf_token" in ablation
+    assert "try:" in ablation
+    assert "ablation_run = train_adapter(ablation_config, primary_datasets)" in ablation
+    assert 'finally:\n        os.environ.pop("HF_TOKEN", None)' in ablation
+    assert ablation.index("del ablation_hf_token") < ablation.index("try:")
+    assert ablation.index("try:") < ablation.index("finally:")
+
+
 def test_notebook_generator_is_deterministic() -> None:
     assert nbformat.writes(build_notebook(), version=4) == nbformat.writes(
         build_notebook(), version=4

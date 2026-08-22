@@ -40,6 +40,7 @@ def build_notebook() -> nbformat.NotebookNode:
         _code(
             """import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,25 +53,35 @@ import torch
 
 torch_before = {"version": torch.__version__, "cuda": torch.version.cuda}
 
-github_repository = os.environ.get("GITHUB_REPOSITORY") or userdata.get("GITHUB_REPOSITORY")
+github_repository = userdata.get("GITHUB_REPOSITORY")
+requested_commit = userdata.get("GITHUB_COMMIT")
 github_token = userdata.get("GITHUB_TOKEN")
+hf_token = userdata.get("HF_TOKEN")
 if not github_repository or not github_token:
     raise RuntimeError("Set GITHUB_REPOSITORY and GITHUB_TOKEN in Colab Secrets before continuing.")
+if (
+    not isinstance(requested_commit, str)
+    or re.fullmatch(r"[0-9a-fA-F]{40}", requested_commit) is None
+):
+    raise RuntimeError("Set GITHUB_COMMIT to an exact 40-character hexadecimal commit SHA.")
+if not hf_token or not hf_token.strip():
+    raise RuntimeError("Set a non-empty HF_TOKEN in Colab Secrets before continuing.")
+os.environ["HF_TOKEN"] = hf_token
+del hf_token
 
 headers = {"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"}
 commit_response = requests.get(
-    f"https://api.github.com/repos/{github_repository}/commits/HEAD", headers=headers, timeout=30
+    f"https://api.github.com/repos/{github_repository}/commits/{requested_commit}",
+    headers=headers,
+    timeout=30,
 )
 commit_response.raise_for_status()
-repository_commit = commit_response.json()["sha"]
-if (
-    not isinstance(repository_commit, str)
-    or len(repository_commit) != 40
-    or any(character not in "0123456789abcdef" for character in repository_commit.casefold())
-):
-    raise RuntimeError("GitHub did not return an immutable repository commit")
+verified_commit = commit_response.json()["sha"]
+if not isinstance(verified_commit, str) or verified_commit != requested_commit:
+    raise RuntimeError("GitHub did not verify the requested immutable repository commit")
+repository_commit = verified_commit
 archive_response = requests.get(
-    f"https://api.github.com/repos/{github_repository}/zipball/{repository_commit}",
+    f"https://api.github.com/repos/{github_repository}/zipball/{verified_commit}",
     headers=headers,
     timeout=120,
 )
@@ -280,7 +291,8 @@ export_condition_manifest(primary_condition, Path("results/raw/primary-r16/manif
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[7]),
         _code(
-            """archive_path = Path("/content/lumina-results.zip")
+            """os.environ.pop("HF_TOKEN", None)
+archive_path = Path("/content/lumina-results.zip")
 with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
     for candidate in sorted(Path("results").rglob("*")):
         if not candidate.is_file():
@@ -294,9 +306,17 @@ files.download(str(archive_path))"""
         _code(
             """RUN_ABLATION = False
 if RUN_ABLATION:
-    ablation_config = load_experiment_config(Path("configs/ablation-r8.yaml"))
-    ablation_run = train_adapter(ablation_config, primary_datasets)
-    print({"selected_checkpoint": ablation_run.selected_checkpoint})"""
+    ablation_hf_token = userdata.get("HF_TOKEN")
+    if not ablation_hf_token or not ablation_hf_token.strip():
+        raise RuntimeError("Set a non-empty HF_TOKEN in Colab Secrets before running ablation.")
+    os.environ["HF_TOKEN"] = ablation_hf_token
+    del ablation_hf_token
+    try:
+        ablation_config = load_experiment_config(Path("configs/ablation-r8.yaml"))
+        ablation_run = train_adapter(ablation_config, primary_datasets)
+        print({"selected_checkpoint": ablation_run.selected_checkpoint})
+    finally:
+        os.environ.pop("HF_TOKEN", None)"""
         ),
     ]
     for index, cell in enumerate(notebook.cells):

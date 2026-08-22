@@ -67,6 +67,53 @@ def test_t4_fallback_is_recorded_not_silent() -> None:
     )
 
 
+def test_fp16_amp_restores_trainable_parameters_to_fp32_before_training(
+    monkeypatch,
+) -> None:
+    class FakeData:
+        def __init__(self, dtype: str) -> None:
+            self.dtype = dtype
+
+        def to(self, dtype: str):
+            return FakeData(dtype)
+
+    class FakeParameter:
+        def __init__(self, *, requires_grad: bool, dtype: str) -> None:
+            self.requires_grad = requires_grad
+            self.data = FakeData(dtype)
+
+    trainable = FakeParameter(requires_grad=True, dtype="bfloat16")
+    frozen = FakeParameter(requires_grad=False, dtype="bfloat16")
+
+    class FakeModel:
+        @staticmethod
+        def parameters():
+            return (trainable, frozen)
+
+    class FakeTrainer:
+        model = FakeModel()
+        observed_dtypes = None
+
+        def train(self) -> None:
+            self.observed_dtypes = (trainable.data.dtype, frozen.data.dtype)
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(float32="float32"))
+    trainer = FakeTrainer()
+    train_with_runtime_precision = getattr(gpu_runtime, "_train_with_runtime_precision", None)
+
+    assert callable(train_with_runtime_precision)
+    train_with_runtime_precision(
+        trainer,
+        gpu_runtime.RuntimeConfig(
+            compute_dtype="float16",
+            max_sequence_length=1024,
+            deviations=("BF16 unsupported; used FP16",),
+        ),
+    )
+
+    assert trainer.observed_dtypes == ("float32", "bfloat16")
+
+
 def test_probe_gpu_does_not_treat_emulated_t4_bf16_as_native(monkeypatch) -> None:
     class T4Cuda:
         @staticmethod

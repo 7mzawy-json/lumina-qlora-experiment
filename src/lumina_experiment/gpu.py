@@ -284,6 +284,16 @@ def _dtype(name: str):
     return torch.bfloat16 if name == "bfloat16" else torch.float16
 
 
+def _train_with_runtime_precision(trainer, runtime: RuntimeConfig) -> None:
+    import torch
+
+    if runtime.compute_dtype == "float16":
+        for parameter in trainer.model.parameters():
+            if parameter.requires_grad:
+                parameter.data = parameter.data.to(torch.float32)
+    trainer.train()
+
+
 def _load_model_and_tokenizer(config: ExperimentConfig, revision: str, runtime: RuntimeConfig):
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
@@ -452,7 +462,7 @@ def train_adapter(
         peft_config=lora,
     )
     started = time.monotonic()
-    trainer.train()
+    _train_with_runtime_precision(trainer, runtime)
     final_adapter = output_dir / "final-adapter"
     trainer.save_model(str(final_adapter))
     selected_checkpoint, validation_selection = select_validation_checkpoint(

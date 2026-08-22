@@ -291,11 +291,15 @@ def _load_model_and_tokenizer(config: ExperimentConfig, revision: str, runtime: 
 
 
 def _assert_assistant_generation_mask(tokenizer, record: InstructionRecord) -> None:
+    from trl.chat_template_utils import get_training_chat_template
+
+    training_chat_template = get_training_chat_template(tokenizer)
     rendered = tokenizer.apply_chat_template(
         [{"role": message.role, "content": message.content} for message in record.messages],
         tokenize=True,
         return_dict=True,
         return_assistant_tokens_mask=True,
+        chat_template=training_chat_template,
     )
     masks = rendered.get("assistant_masks") or rendered.get("assistant_tokens_mask")
     if masks is None or not any(masks):

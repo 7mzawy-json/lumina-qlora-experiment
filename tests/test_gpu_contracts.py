@@ -2,7 +2,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -16,6 +16,7 @@ from lumina_experiment.contracts import (
     Message,
 )
 from lumina_experiment.gpu import (
+    _assert_assistant_generation_mask,
     _validation_records,
     build_condition_manifest,
     build_generation_kwargs,
@@ -115,6 +116,36 @@ def test_smoke_record_limit_bounds_both_training_splits() -> None:
     assert [record.id for record in limited.validation] == [
         f"validation-{index:03d}" for index in range(50)
     ]
+
+
+def test_assistant_mask_preflight_uses_trl_training_template(monkeypatch) -> None:
+    class QwenTokenizer:
+        def apply_chat_template(
+            self,
+            _messages,
+            *,
+            tokenize,
+            return_dict,
+            return_assistant_tokens_mask,
+            chat_template=None,
+        ):
+            assert tokenize is True
+            assert return_dict is True
+            assert return_assistant_tokens_mask is True
+            if chat_template == "trl-qwen3-training-template":
+                return {"assistant_masks": [0, 1, 1]}
+            return {"assistant_masks": [0, 0, 0]}
+
+    chat_template_utils = ModuleType("trl.chat_template_utils")
+    chat_template_utils.get_training_chat_template = lambda _tokenizer: (
+        "trl-qwen3-training-template"
+    )
+    trl = ModuleType("trl")
+    trl.chat_template_utils = chat_template_utils
+    monkeypatch.setitem(sys.modules, "trl", trl)
+    monkeypatch.setitem(sys.modules, "trl.chat_template_utils", chat_template_utils)
+
+    _assert_assistant_generation_mask(QwenTokenizer(), instruction_record("mask", 0))
 
 
 def test_generation_config_is_deterministic() -> None:

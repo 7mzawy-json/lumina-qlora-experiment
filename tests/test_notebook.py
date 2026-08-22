@@ -1,4 +1,6 @@
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import nbformat
@@ -149,6 +151,38 @@ def test_notebook_records_every_direct_gpu_requirement_version_in_manifests() ->
     ]
     for package in expected_packages:
         assert f'"{package}"' in package_versions_source
+
+
+def test_runtime_cell_exposes_checkout_src_to_current_python_process(tmp_path: Path) -> None:
+    package_directory = tmp_path / "src" / "lumina_experiment"
+    package_directory.mkdir(parents=True)
+    (package_directory / "__init__.py").write_text(
+        'BOOTSTRAP_MARKER = "current-process-import-works"\n', encoding="utf-8"
+    )
+
+    runtime_source = build_notebook().cells[2].source
+    pip_check = 'subprocess.run([sys.executable, "-m", "pip", "check"], check=True)\n'
+    torch_check = '\ntorch_after = {"version": torch.__version__, "cuda": torch.version.cuda}'
+    bootstrap_source = runtime_source.split(pip_check, maxsplit=1)[1].split(
+        torch_check, maxsplit=1
+    )[0]
+    probe = f"""import sys
+from pathlib import Path
+
+workspace = Path({str(tmp_path)!r})
+{bootstrap_source}
+from lumina_experiment import BOOTSTRAP_MARKER
+assert BOOTSTRAP_MARKER == "current-process-import-works"
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_notebook_imports_the_verified_processed_archive_before_smoke_work() -> None:

@@ -111,6 +111,10 @@ subprocess.run(
 subprocess.run([sys.executable, "-m", "pip", "install", "-e", ".", "--no-deps"], check=True)
 subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
 
+checkout_src = str((workspace / "src").resolve())
+if checkout_src not in sys.path:
+    sys.path.insert(0, checkout_src)
+
 torch_after = {"version": torch.__version__, "cuda": torch.version.cuda}
 if torch_after != torch_before:
     raise RuntimeError("dependency installation changed the Colab CUDA PyTorch build")

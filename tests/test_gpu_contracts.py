@@ -6,8 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
+import lumina_experiment.gpu as gpu_runtime
 from lumina_experiment.config import load_experiment_config
-from lumina_experiment.contracts import Generation, GpuProbe
+from lumina_experiment.contracts import (
+    DatasetSplit,
+    Generation,
+    GpuProbe,
+    InstructionRecord,
+    Message,
+)
 from lumina_experiment.gpu import (
     _validation_records,
     build_condition_manifest,
@@ -32,6 +39,17 @@ def gpu(name: str, bf16: bool, vram_gb: float) -> GpuProbe:
         bf16_supported=bf16,
         torch_version="2.7.0",
         cuda_version="12.6",
+    )
+
+
+def instruction_record(prefix: str, index: int) -> InstructionRecord:
+    return InstructionRecord(
+        id=f"{prefix}-{index:03d}",
+        source="test-source",
+        license="Apache-2.0",
+        capability="general",
+        cluster_id=f"{prefix}-cluster-{index:03d}",
+        messages=(Message("user", f"Prompt {index}"), Message("assistant", f"Answer {index}")),
     )
 
 
@@ -80,6 +98,23 @@ def test_probe_gpu_does_not_treat_emulated_t4_bf16_as_native(monkeypatch) -> Non
     detected = probe_gpu()
 
     assert detected.bf16_supported is False
+
+
+def test_smoke_record_limit_bounds_both_training_splits() -> None:
+    datasets = DatasetSplit(
+        train=tuple(instruction_record("train", index) for index in range(60)),
+        validation=tuple(instruction_record("validation", index) for index in range(60)),
+    )
+    limiter = getattr(gpu_runtime, "_limit_dataset_split", None)
+
+    assert callable(limiter), "GPU training must consume ExperimentConfig.record_limit"
+
+    limited = limiter(load_experiment_config(Path("configs/smoke.yaml")), datasets)
+
+    assert [record.id for record in limited.train] == [f"train-{index:03d}" for index in range(50)]
+    assert [record.id for record in limited.validation] == [
+        f"validation-{index:03d}" for index in range(50)
+    ]
 
 
 def test_generation_config_is_deterministic() -> None:

@@ -202,6 +202,17 @@ def load_frozen_dataset_split(directory: Path) -> DatasetSplit:
     )
 
 
+def _limit_dataset_split(config: ExperimentConfig, datasets: DatasetSplit) -> DatasetSplit:
+    """Apply a deterministic, configuration-bound record limit for smoke runs."""
+
+    if config.record_limit is None:
+        return datasets
+    return DatasetSplit(
+        train=datasets.train[: config.record_limit],
+        validation=datasets.validation[: config.record_limit],
+    )
+
+
 def _sha256(value: str | bytes) -> str:
     payload = value.encode("utf-8") if isinstance(value, str) else value
     return hashlib.sha256(payload).hexdigest()
@@ -339,12 +350,13 @@ def train_adapter(
 
     gpu = probe_gpu()
     runtime = resolve_runtime_config(config, gpu)
+    training_datasets = _limit_dataset_split(config, datasets)
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     torch.cuda.reset_peak_memory_stats()
 
     model, tokenizer = _load_model_and_tokenizer(config, resolved_revision, runtime)
-    _assert_assistant_generation_mask(tokenizer, datasets.train[0])
+    _assert_assistant_generation_mask(tokenizer, training_datasets.train[0])
     lora = LoraConfig(
         r=config.lora_rank,
         lora_alpha=config.lora_alpha,
@@ -380,8 +392,10 @@ def train_adapter(
         greater_is_better=False,
         report_to="none",
     )
-    train_records = Dataset.from_list([record.to_dict() for record in datasets.train])
-    validation_records = Dataset.from_list([record.to_dict() for record in datasets.validation])
+    train_records = Dataset.from_list([record.to_dict() for record in training_datasets.train])
+    validation_records = Dataset.from_list(
+        [record.to_dict() for record in training_datasets.validation]
+    )
     trainer = SFTTrainer(
         model=model,
         args=arguments,
@@ -407,7 +421,7 @@ def train_adapter(
         model_id=config.model_id,
         model_revision=resolved_revision,
         config_hash=_config_hash(config),
-        dataset_hash=_dataset_hash(datasets),
+        dataset_hash=_dataset_hash(training_datasets),
         evaluation_hash=_frozen_evaluation_hash(),
         selected_checkpoint=selected_checkpoint,
         validation_selection=validation_selection,

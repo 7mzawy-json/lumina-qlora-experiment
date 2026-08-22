@@ -1,6 +1,8 @@
 import hashlib
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,7 @@ from lumina_experiment.gpu import (
     _validation_records,
     build_condition_manifest,
     build_generation_kwargs,
+    probe_gpu,
     resolve_runtime_config,
     select_validation_checkpoint,
     verify_frozen_dataset_split,
@@ -43,6 +46,40 @@ def test_t4_fallback_is_recorded_not_silent() -> None:
         "BF16 unsupported; used FP16",
         "VRAM below 20 GB; reduced max sequence length from 2048 to 1024",
     )
+
+
+def test_probe_gpu_does_not_treat_emulated_t4_bf16_as_native(monkeypatch) -> None:
+    class T4Cuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def current_device() -> int:
+            return 0
+
+        @staticmethod
+        def get_device_properties(_device_index: int) -> SimpleNamespace:
+            return SimpleNamespace(total_memory=15 * 1024**3, major=7, minor=5)
+
+        @staticmethod
+        def get_device_name(_device_index: int) -> str:
+            return "Tesla T4"
+
+        @staticmethod
+        def is_bf16_supported() -> bool:
+            return True
+
+    fake_torch = SimpleNamespace(
+        __version__="2.11.0+cu128",
+        cuda=T4Cuda(),
+        version=SimpleNamespace(cuda="12.8"),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    detected = probe_gpu()
+
+    assert detected.bf16_supported is False
 
 
 def test_generation_config_is_deterministic() -> None:

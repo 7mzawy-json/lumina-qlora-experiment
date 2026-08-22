@@ -81,10 +81,13 @@ def probe_gpu() -> GpuProbe:
         raise RuntimeError("an NVIDIA CUDA GPU is required for the QLoRA runtime")
     device_index = torch.cuda.current_device()
     properties = torch.cuda.get_device_properties(device_index)
+    native_bf16_supported = (properties.major, properties.minor) >= (8, 0) and bool(
+        torch.cuda.is_bf16_supported()
+    )
     return GpuProbe(
         name=torch.cuda.get_device_name(device_index),
         vram_gb=properties.total_memory / (1024**3),
-        bf16_supported=bool(torch.cuda.is_bf16_supported()),
+        bf16_supported=native_bf16_supported,
         torch_version=torch.__version__,
         cuda_version=torch.version.cuda,
     )

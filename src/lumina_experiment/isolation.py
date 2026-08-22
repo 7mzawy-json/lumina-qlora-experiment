@@ -213,7 +213,9 @@ def _canonical_file(path: Path) -> tuple[str, int]:
     return normalized, len(normalized.splitlines())
 
 
-def freeze_files(paths: Sequence[Path], destination: Path) -> str:
+def freeze_digest(paths: Sequence[Path]) -> str:
+    """Return the canonical freeze digest without modifying the freeze artifact."""
+
     if not paths:
         raise ValueError("at least one file is required for freezing")
     resolved = [path.resolve() for path in paths]
@@ -232,7 +234,11 @@ def freeze_files(paths: Sequence[Path], destination: Path) -> str:
             }
         )
     manifest = {"files": sorted(entries, key=lambda entry: str(entry["path"]))}
-    digest = hashlib.sha256(f"{canonical_json(manifest)}\n".encode()).hexdigest()
+    return hashlib.sha256(f"{canonical_json(manifest)}\n".encode()).hexdigest()
+
+
+def freeze_files(paths: Sequence[Path], destination: Path) -> str:
+    digest = freeze_digest(paths)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(f"{digest}\n", encoding="utf-8", newline="\n")
     return digest

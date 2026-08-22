@@ -196,3 +196,20 @@ def test_run_manifest_requires_identity_revision_and_hashes(field_name: str) -> 
 
     with pytest.raises(ValueError, match=field_name):
         RunManifest(**fields)
+
+
+def test_run_manifest_records_validation_only_checkpoint_selection() -> None:
+    manifest = RunManifest(
+        run_id="run-001",
+        evidence_state="smoke_test_verified",
+        model_id="Qwen/Qwen3-0.6B-Base",
+        model_revision="0123456789abcdef",
+        config_hash="config-hash",
+        dataset_hash="dataset-hash",
+        evaluation_hash="evaluation-hash",
+        selected_checkpoint="artifacts/checkpoints/smoke/checkpoint-20",
+        validation_selection={"validation_loss": 0.42},
+    )
+
+    assert manifest.selected_checkpoint.endswith("checkpoint-20")
+    assert manifest.validation_selection == {"validation_loss": 0.42}

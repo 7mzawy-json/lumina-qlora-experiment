@@ -340,6 +340,8 @@ class RunManifest:
     config_hash: str
     dataset_hash: str
     evaluation_hash: str
+    selected_checkpoint: str | None = None
+    validation_selection: Mapping[str, float] = field(default_factory=dict)
     artifacts: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -356,6 +358,24 @@ class RunManifest:
             )
         if self.evidence_state not in EVIDENCE_STATES:
             raise ValueError(f"unsupported evidence_state: {self.evidence_state}")
+        if self.selected_checkpoint is not None:
+            object.__setattr__(
+                self,
+                "selected_checkpoint",
+                _require_text(self.selected_checkpoint, "selected_checkpoint"),
+            )
+        if not isinstance(self.validation_selection, Mapping):
+            raise ValueError("validation_selection must be an object")
+        if any(
+            not isinstance(name, str)
+            or not name.startswith("validation_")
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for name, value in self.validation_selection.items()
+        ):
+            raise ValueError("validation_selection must contain finite validation metrics")
+        object.__setattr__(self, "validation_selection", dict(self.validation_selection))
 
 
 def canonical_json(value: object) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any
@@ -170,6 +171,164 @@ class GpuProbe:
     bf16_supported: bool
     torch_version: str
     cuda_version: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _require_text(self.name, "gpu.name"))
+        object.__setattr__(self, "vram_gb", _require_positive_float(self.vram_gb, "gpu.vram_gb"))
+        if not isinstance(self.bf16_supported, bool):
+            raise ValueError("gpu.bf16_supported must be boolean")
+        object.__setattr__(
+            self,
+            "torch_version",
+            _require_text(self.torch_version, "gpu.torch_version"),
+        )
+        if self.cuda_version is not None:
+            object.__setattr__(
+                self,
+                "cuda_version",
+                _require_text(self.cuda_version, "gpu.cuda_version"),
+            )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> GpuProbe:
+        bf16_supported = payload.get("bf16_supported")
+        if not isinstance(bf16_supported, bool):
+            raise ValueError("gpu.bf16_supported must be boolean")
+        return cls(
+            name=_require_text(payload.get("name"), "gpu.name"),
+            vram_gb=_require_positive_float(payload.get("vram_gb"), "gpu.vram_gb"),
+            bf16_supported=bf16_supported,
+            torch_version=_require_text(payload.get("torch_version"), "gpu.torch_version"),
+            cuda_version=(
+                _require_text(payload["cuda_version"], "gpu.cuda_version")
+                if payload.get("cuda_version") is not None
+                else None
+            ),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def _require_hex_digest(value: object, field_name: str, length: int) -> str:
+    text = _require_text(value, field_name)
+    if len(text) != length or any(character not in "0123456789abcdefABCDEF" for character in text):
+        raise ValueError(f"{field_name} must be a {length}-character hexadecimal digest")
+    return text.casefold()
+
+
+def _require_positive_float(value: object, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be finite and positive")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be finite and positive") from error
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{field_name} must be finite and positive")
+    return number
+
+
+@dataclass(frozen=True)
+class ConditionManifest:
+    """Portable evidence emitted for one baseline or adapter generation condition."""
+
+    evidence_state: str
+    condition: str
+    evaluation_hash: str
+    case_ids: tuple[str, ...]
+    inference_config_hash: str
+    generation_hash: str
+    gpu: Mapping[str, object]
+    runtime_seconds: float
+    peak_vram_gb: float
+    model_revision: str
+    package_versions: Mapping[str, str]
+    adapter_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.evidence_state not in EVIDENCE_STATES:
+            raise ValueError(f"unsupported evidence_state: {self.evidence_state}")
+        object.__setattr__(self, "condition", _require_text(self.condition, "condition"))
+        for field_name in (
+            "evaluation_hash",
+            "inference_config_hash",
+            "generation_hash",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _require_hex_digest(getattr(self, field_name), field_name, 64),
+            )
+        object.__setattr__(
+            self,
+            "model_revision",
+            _require_hex_digest(self.model_revision, "model_revision", 40),
+        )
+        if not self.case_ids or len(self.case_ids) != len(set(self.case_ids)):
+            raise ValueError("case_ids must be non-empty and unique")
+        if not isinstance(self.gpu, Mapping):
+            raise ValueError("gpu must be an object")
+        object.__setattr__(self, "gpu", GpuProbe.from_dict(self.gpu).to_dict())
+        for field_name in ("runtime_seconds", "peak_vram_gb"):
+            object.__setattr__(
+                self,
+                field_name,
+                _require_positive_float(getattr(self, field_name), field_name),
+            )
+        if not isinstance(self.package_versions, Mapping) or not self.package_versions:
+            raise ValueError("package_versions must not be empty")
+        if not all(
+            isinstance(name, str) and name.strip() and isinstance(version, str) and version.strip()
+            for name, version in self.package_versions.items()
+        ):
+            raise ValueError("package_versions must contain non-empty strings")
+        if self.adapter_hash is not None:
+            object.__setattr__(
+                self,
+                "adapter_hash",
+                _require_hex_digest(self.adapter_hash, "adapter_hash", 64),
+            )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> ConditionManifest:
+        raw_case_ids = payload.get("case_ids")
+        if not isinstance(raw_case_ids, Sequence) or isinstance(raw_case_ids, (str, bytes)):
+            raise ValueError("case_ids must be a sequence")
+        gpu = payload.get("gpu")
+        packages = payload.get("package_versions")
+        if not isinstance(gpu, Mapping):
+            raise ValueError("gpu must be an object")
+        if not isinstance(packages, Mapping):
+            raise ValueError("package_versions must be an object")
+        if not all(
+            isinstance(name, str) and isinstance(version, str) for name, version in packages.items()
+        ):
+            raise ValueError("package_versions must contain string names and versions")
+        adapter_hash = payload.get("adapter_hash")
+        if adapter_hash is not None and not isinstance(adapter_hash, str):
+            raise ValueError("adapter_hash must be a string")
+        return cls(
+            evidence_state=_require_text(payload.get("evidence_state"), "evidence_state"),
+            condition=_require_text(payload.get("condition"), "condition"),
+            evaluation_hash=_require_text(payload.get("evaluation_hash"), "evaluation_hash"),
+            case_ids=tuple(_require_text(case_id, "case_id") for case_id in raw_case_ids),
+            inference_config_hash=_require_text(
+                payload.get("inference_config_hash"), "inference_config_hash"
+            ),
+            generation_hash=_require_text(payload.get("generation_hash"), "generation_hash"),
+            gpu=dict(gpu),
+            runtime_seconds=_require_positive_float(
+                payload.get("runtime_seconds"), "runtime_seconds"
+            ),
+            peak_vram_gb=_require_positive_float(payload.get("peak_vram_gb"), "peak_vram_gb"),
+            model_revision=_require_text(payload.get("model_revision"), "model_revision"),
+            package_versions=dict(packages),
+            adapter_hash=adapter_hash,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)

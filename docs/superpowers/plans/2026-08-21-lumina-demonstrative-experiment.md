@@ -501,7 +501,7 @@ Commit: `git commit -m "feat: add blind review and paired result reporting"`.
 
 **Interfaces:**
 - Consumes: frozen train/validation JSONL, evaluation JSONL, `ExperimentConfig`.
-- Produces: `probe_gpu() -> GpuProbe`, `resolve_hub_revision(repo_id) -> str`, `train_adapter(config, datasets) -> RunManifest`, and `generate_condition(config, cases, adapter_path=None) -> list[Generation]`.
+- Produces: `probe_gpu() -> GpuProbe`, `resolve_hub_revision(repo_id) -> str`, `train_adapter(config, datasets) -> RunManifest`, and `generate_condition(config, cases, adapter_path=None) -> list[Generation]`; each completed generation condition exports the shared typed `ConditionManifest` contract consumed by Task 5 reporting.
 - Produces: `resolve_runtime_config(config: ExperimentConfig, gpu: GpuProbe) -> RuntimeConfig` and `build_generation_kwargs(config: ExperimentConfig) -> dict[str, object]`.
 - Produces: a Colab notebook that calls package interfaces rather than duplicating pipeline logic.
 
@@ -630,9 +630,10 @@ Commit: `git commit -m "docs: add verified experiment preflight and runbook"`.
 - Create: `results/summary/smoke-manifest.json`
 - Create: `results/summary/base-manifest.json`
 - Create: `results/summary/primary-r16-manifest.json`
+- Create: `results/summary/evidence-manifest.json`
 - Create: `results/summary/metrics.json`
 - Create: `results/summary/metrics.csv`
-- Create: `results/summary/review.csv`
+- Create locally: `results/raw/scores.jsonl`, `results/raw/diagnostics.jsonl`, `results/raw/review.csv`, and `results/raw/review-key.json` (ignored)
 - Create: `results/summary/failure-analysis.md`
 
 **Interfaces:**
@@ -660,9 +661,9 @@ Run section 6. The notebook must verify identical evaluation hash, template hash
 Run:
 
 ```powershell
-python scripts/score_results.py --base results/raw/base --adapter results/raw/primary-r16 --output results/summary/scores.jsonl
-python scripts/build_review_sheet.py --scores results/summary/scores.jsonl --output results/summary/review.csv
-python scripts/summarize_results.py --scores results/summary/scores.jsonl --review results/summary/review.csv --output results/summary
+python scripts/score_results.py --base results/raw/base --adapter results/raw/primary-r16 --output results/raw/scores.jsonl
+python scripts/build_review_sheet.py --scores results/raw/scores.jsonl --output results/raw/review.csv
+python scripts/summarize_results.py --scores results/raw/scores.jsonl --review results/raw/review.csv --diagnostics results/raw/diagnostics.jsonl --output results/summary
 ```
 
 Complete the 42 concealed review pairs before unblinding. If no safe code sandbox was prepared, keep programming execution disabled and report syntax plus rubric scores.
@@ -675,7 +676,7 @@ Run rank 8 only when the primary evidence is complete, manifests validate, at le
 
 Run: `pytest -v`
 
-Run: `python scripts/summarize_results.py --verify-only --output results/summary`
+Run: `python scripts/summarize_results.py --verify-only --scores results/raw/scores.jsonl --review results/raw/review.csv --diagnostics results/raw/diagnostics.jsonl --output results/summary`
 
 Expected: 210 complete paired scored cases, 20 paired diagnostics, matching hashes, completed concealed review, and an explicit success/failure decision. Commit only manifests with sanitized paths, aggregate metrics, plots, and failure analysis; never commit raw generations or adapters.
 
@@ -728,7 +729,7 @@ Run: `ruff check src scripts tests`
 
 Run: `ruff format --check src scripts tests`
 
-Run: `python scripts/summarize_results.py --verify-only --output results/summary`
+Run: `python scripts/summarize_results.py --verify-only --scores results/raw/scores.jsonl --review results/raw/review.csv --diagnostics results/raw/diagnostics.jsonl --output results/summary`
 
 Run: `git grep -n -I -E "hf_[A-Za-z0-9]{20,}|github_pat_|ghp_|WANDB_API_KEY=.+|HF_TOKEN=.+"`
 

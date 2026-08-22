@@ -3,6 +3,7 @@ import json
 import pytest
 
 from lumina_experiment.contracts import (
+    ConditionManifest,
     EvalCase,
     Generation,
     InstructionRecord,
@@ -10,6 +11,84 @@ from lumina_experiment.contracts import (
     RunManifest,
     canonical_json,
 )
+
+
+def test_condition_manifest_has_typed_task_6_to_task_8_evidence_fields() -> None:
+    manifest = ConditionManifest.from_dict(
+        {
+            "evidence_state": "8b_gpu_measured",
+            "condition": "base",
+            "evaluation_hash": "a" * 64,
+            "case_ids": ["instruction-001"],
+            "inference_config_hash": "b" * 64,
+            "generation_hash": "c" * 64,
+            "gpu": {
+                "name": "NVIDIA T4",
+                "vram_gb": 15.0,
+                "bf16_supported": False,
+                "torch_version": "2.0",
+                "cuda_version": "12.1",
+            },
+            "runtime_seconds": 10.0,
+            "peak_vram_gb": 12.0,
+            "model_revision": "d" * 40,
+            "package_versions": {"torch": "2.0"},
+        }
+    )
+
+    assert manifest.condition == "base"
+    assert manifest.case_ids == ("instruction-001",)
+
+
+def test_condition_manifest_rejects_non_string_package_versions() -> None:
+    payload = {
+        "evidence_state": "8b_gpu_measured",
+        "condition": "base",
+        "evaluation_hash": "a" * 64,
+        "case_ids": ["instruction-001"],
+        "inference_config_hash": "b" * 64,
+        "generation_hash": "c" * 64,
+        "gpu": {
+            "name": "NVIDIA T4",
+            "vram_gb": 15.0,
+            "bf16_supported": False,
+            "torch_version": "2.0",
+            "cuda_version": "12.1",
+        },
+        "runtime_seconds": 10.0,
+        "peak_vram_gb": 12.0,
+        "model_revision": "d" * 40,
+        "package_versions": {"torch": 2},
+    }
+
+    with pytest.raises(ValueError, match="package_versions"):
+        ConditionManifest.from_dict(payload)
+
+
+def test_condition_manifest_rejects_non_string_adapter_hash() -> None:
+    payload = {
+        "evidence_state": "8b_gpu_measured",
+        "condition": "primary-r16",
+        "evaluation_hash": "a" * 64,
+        "case_ids": ["instruction-001"],
+        "inference_config_hash": "b" * 64,
+        "generation_hash": "c" * 64,
+        "gpu": {
+            "name": "NVIDIA T4",
+            "vram_gb": 15.0,
+            "bf16_supported": False,
+            "torch_version": "2.0",
+            "cuda_version": "12.1",
+        },
+        "runtime_seconds": 10.0,
+        "peak_vram_gb": 12.0,
+        "model_revision": "d" * 40,
+        "package_versions": {"torch": "2.0"},
+        "adapter_hash": 1,
+    }
+
+    with pytest.raises(ValueError, match="adapter_hash"):
+        ConditionManifest.from_dict(payload)
 
 
 def valid_record_payload() -> dict[str, object]:

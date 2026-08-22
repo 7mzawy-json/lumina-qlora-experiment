@@ -55,6 +55,32 @@ def test_notebook_verifies_freezes_and_preserves_colab_torch() -> None:
     assert "torch_after" in source
 
 
+def test_notebook_imports_the_verified_processed_archive_before_smoke_work() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    assert "lumina-processed.zip" in source
+    required_processed = (
+        'required_processed = {"accepted.jsonl", "train.jsonl", '
+        '"validation.jsonl", "manifest.json"}'
+    )
+    assert required_processed in source
+    assert "shutil.copytree(processed_staging, processed_destination)" in source
+    assert source.index("processed_destination") < source.index("smoke_datasets =")
+
+
+def test_notebook_preserves_drive_archive_and_deletes_only_disposable_copy() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    persistent_archive = (
+        'persistent_processed_archive = Path("/content/drive/MyDrive/lumina-processed.zip")'
+    )
+    assert persistent_archive in source
+    assert 'processed_archive_copy = Path("/content/lumina-processed-upload.zip")' in source
+    assert "shutil.copy2(persistent_processed_archive, processed_archive_copy)" in source
+    assert "processed_archive_copy.unlink(missing_ok=True)" in source
+    assert "persistent_processed_archive.unlink" not in source
+
+
 def test_notebook_resolves_each_model_once_and_passes_immutable_revisions() -> None:
     source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
 

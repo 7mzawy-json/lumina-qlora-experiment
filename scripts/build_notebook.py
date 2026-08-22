@@ -47,7 +47,7 @@ import zipfile
 from pathlib import Path
 
 import requests
-from google.colab import userdata
+from google.colab import files, userdata
 import torch
 
 torch_before = {"version": torch.__version__, "cuda": torch.version.cuda}
@@ -116,6 +116,46 @@ package_versions = {
 print({"gpu": gpu.to_dict(), "python": sys.version.split()[0], "packages": package_versions})"""
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[2]),
+        _code(
+            """USE_DRIVE_PROCESSED_ARCHIVE = False
+if USE_DRIVE_PROCESSED_ARCHIVE:
+    from google.colab import drive
+
+    drive.mount("/content/drive")
+    persistent_processed_archive = Path("/content/drive/MyDrive/lumina-processed.zip")
+    if not persistent_processed_archive.is_file():
+        raise FileNotFoundError(
+            f"processed-data archive is missing: {persistent_processed_archive}"
+        )
+    processed_archive_copy = Path("/content/lumina-processed-upload.zip")
+    shutil.copy2(persistent_processed_archive, processed_archive_copy)
+else:
+    uploaded = files.upload()
+    source_processed_archive = workspace / "lumina-processed.zip"
+    if source_processed_archive.name not in uploaded:
+        raise RuntimeError("Upload the exact local lumina-processed.zip package.")
+    if not source_processed_archive.is_file():
+        raise FileNotFoundError(f"processed-data archive is missing: {source_processed_archive}")
+    processed_archive_copy = Path("/content/lumina-processed-upload.zip")
+    shutil.copy2(source_processed_archive, processed_archive_copy)
+    source_processed_archive.unlink(missing_ok=True)
+processed_staging = Path("/content/lumina-processed-staging")
+shutil.rmtree(processed_staging, ignore_errors=True)
+with zipfile.ZipFile(processed_archive_copy) as archive:
+    for member in archive.infolist():
+        member_path = Path(member.filename)
+        if member_path.is_absolute() or ".." in member_path.parts:
+            raise RuntimeError("refusing an unsafe processed-data archive member")
+    archive.extractall(processed_staging)
+required_processed = {"accepted.jsonl", "train.jsonl", "validation.jsonl", "manifest.json"}
+if not required_processed.issubset({item.name for item in processed_staging.iterdir()}):
+    raise RuntimeError("processed-data archive is missing required frozen artifacts")
+processed_destination = workspace / "data" / "processed"
+if processed_destination.exists():
+    raise RuntimeError("refusing to replace an existing processed-data directory")
+shutil.copytree(processed_staging, processed_destination)
+processed_archive_copy.unlink(missing_ok=True)"""
+        ),
         _code(
             """from lumina_experiment.config import load_experiment_config
 from lumina_experiment.gpu import (
@@ -248,8 +288,6 @@ with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as arc
         if candidate.suffix in {".bin", ".pt", ".pth", ".safetensors"}:
             continue
         archive.write(candidate, candidate.as_posix())
-from google.colab import files
-
 files.download(str(archive_path))"""
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[8]),

@@ -3,6 +3,7 @@ ipykernel
 jsonschema
 jupyterlab
 matplotlib
+nbformat
 numpy
 pandas
 pytest

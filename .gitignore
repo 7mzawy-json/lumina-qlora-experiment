@@ -2,6 +2,9 @@
 .venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
 .pytest_cache/
 .ruff_cache/
 .coverage
@@ -35,3 +38,6 @@ wandb/
 # Operating system
 .DS_Store
 Thumbs.db
+
+# Local Git worktrees
+.worktrees/

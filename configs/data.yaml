@@ -1,0 +1,13 @@
+dataset_id: OpenAssistant/oasst1
+revision_file: configs/revisions.yaml
+language: en
+seed: 42
+total_records: 3000
+train_records: 2700
+validation_records: 300
+mixture:
+  general_oasst1: 2100
+  capability_oasst1: 750
+  authored: 150
+authored_path: data/authored/training.jsonl
+processed_dir: data/processed

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -21,7 +22,13 @@ ALLOWED_CAPABILITIES = frozenset(
     }
 )
 EVIDENCE_STATES = frozenset(
-    {"planned", "locally_verified", "smoke_test_verified", "8b_gpu_measured"}
+    {
+        "planned",
+        "locally_verified",
+        "smoke_test_verified",
+        "8b_pilot_measured",
+        "8b_gpu_measured",
+    }
 )
 
 
@@ -156,6 +163,22 @@ class Generation:
     @property
     def identity(self) -> tuple[str, str]:
         return (self.condition, self.case_id)
+
+
+def generation_artifact_hash(generations: Sequence[Generation]) -> str:
+    """Hash the portable generation fields shared by raw and scored artifacts."""
+
+    records = [
+        {
+            "case_id": generation.case_id,
+            "condition": generation.condition,
+            "output": generation.output,
+            "evidence_state": generation.evidence_state,
+        }
+        for generation in sorted(generations, key=lambda item: item.case_id)
+    ]
+    payload = "".join(f"{canonical_json(record)}\n" for record in records)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

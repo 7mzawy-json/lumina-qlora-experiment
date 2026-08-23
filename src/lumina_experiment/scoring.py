@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ast
 import json
+import random
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -336,3 +337,32 @@ def load_eval_directory(path: Path) -> list[EvalCase]:
             seen_ids.add(case.id)
             cases.append(case)
     return cases
+
+
+def select_balanced_cases(cases: Sequence[EvalCase], *, limit: int, seed: int) -> list[EvalCase]:
+    """Select a deterministic capability-balanced subset for a bounded pilot."""
+
+    if limit <= 0:
+        raise ValueError("balanced evaluation limit must be positive")
+    if limit > len(cases):
+        raise ValueError(f"balanced evaluation limit {limit} exceeds {len(cases)} cases")
+    grouped: dict[str, list[EvalCase]] = defaultdict(list)
+    for case in cases:
+        grouped[case.capability].append(case)
+    capabilities = sorted(grouped)
+    if limit < len(capabilities):
+        raise ValueError("balanced evaluation limit must cover every capability")
+
+    rng = random.Random(seed)
+    per_capability, remainder = divmod(limit, len(capabilities))
+    selected: list[EvalCase] = []
+    for index, capability in enumerate(capabilities):
+        candidates = sorted(grouped[capability], key=lambda case: case.id)
+        rng.shuffle(candidates)
+        count = per_capability + (1 if index < remainder else 0)
+        if len(candidates) < count:
+            raise ValueError(
+                f"capability {capability!r} has {len(candidates)} cases; {count} required"
+            )
+        selected.extend(candidates[:count])
+    return selected

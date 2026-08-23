@@ -154,6 +154,17 @@ def test_generation_rejects_unknown_evidence_state() -> None:
         )
 
 
+def test_generation_accepts_directional_8b_pilot_evidence() -> None:
+    generation = Generation(
+        case_id="instruction-001",
+        condition="pilot-r16",
+        output="Pilot response",
+        evidence_state="8b_pilot_measured",
+    )
+
+    assert generation.evidence_state == "8b_pilot_measured"
+
+
 def test_canonical_json_is_stable_and_compact() -> None:
     serialized = canonical_json({"z": 1, "a": ["é", 2]})
 

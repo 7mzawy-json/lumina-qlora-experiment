@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from lumina_experiment.contracts import EVIDENCE_STATES
+
 
 @dataclass(frozen=True)
 class ExperimentConfig:
@@ -30,8 +32,13 @@ class ExperimentConfig:
     max_new_tokens: int
     max_steps: int | None = None
     record_limit: int | None = None
+    validation_record_limit: int | None = None
     eval_case_limit: int | None = None
     output_dir: str | None = None
+    mixture_source: str | None = None
+    mixture_other_source: str | None = None
+    mixture_fraction: float | None = None
+    evidence_state: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip() or not self.model_id.strip():
@@ -58,10 +65,44 @@ class ExperimentConfig:
         for field_name, value in positive_fields.items():
             if value <= 0:
                 raise ValueError(f"{field_name} must be positive")
+        for field_name in (
+            "max_steps",
+            "record_limit",
+            "validation_record_limit",
+            "eval_case_limit",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{field_name} must be positive when provided")
         if not 0 <= self.lora_dropout < 1:
             raise ValueError("lora_dropout must be in [0, 1)")
         if not 0 <= self.warmup_ratio < 1:
             raise ValueError("warmup_ratio must be in [0, 1)")
+        mixture_fields = (
+            self.mixture_source,
+            self.mixture_other_source,
+            self.mixture_fraction,
+        )
+        if any(value is not None for value in mixture_fields) and not all(
+            value is not None for value in mixture_fields
+        ):
+            raise ValueError(
+                "mixture_source, mixture_other_source, and mixture_fraction "
+                "must be provided together"
+            )
+        if self.mixture_source is not None:
+            if not self.mixture_source.strip():
+                raise ValueError("mixture_source must be non-empty")
+            if not self.mixture_other_source or not self.mixture_other_source.strip():
+                raise ValueError("mixture_other_source must be non-empty")
+            if self.mixture_source == self.mixture_other_source:
+                raise ValueError("mixture sources must be different")
+            if self.record_limit is None:
+                raise ValueError("mixture sampling requires record_limit")
+            if not 0 < self.mixture_fraction < 1:
+                raise ValueError("mixture_fraction must be in (0, 1)")
+        if self.evidence_state is not None and self.evidence_state not in EVIDENCE_STATES:
+            raise ValueError(f"unsupported evidence_state: {self.evidence_state}")
 
     def without(self, *field_names: str) -> dict[str, object]:
         excluded = set(field_names)

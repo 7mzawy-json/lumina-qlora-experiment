@@ -6,6 +6,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import random
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -21,6 +22,7 @@ from lumina_experiment.contracts import (
     InstructionRecord,
     RunManifest,
     canonical_json,
+    generation_artifact_hash,
 )
 from lumina_experiment.isolation import freeze_digest
 
@@ -217,14 +219,82 @@ def load_frozen_dataset_split(directory: Path) -> DatasetSplit:
     )
 
 
-def _limit_dataset_split(config: ExperimentConfig, datasets: DatasetSplit) -> DatasetSplit:
-    """Apply a deterministic, configuration-bound record limit for smoke runs."""
+def _select_mixture(
+    records: Sequence[InstructionRecord],
+    *,
+    limit: int | None,
+    seed: int,
+    mixture_source: str | None,
+    mixture_other_source: str | None,
+    mixture_fraction: float | None,
+) -> tuple[InstructionRecord, ...]:
+    if limit is None:
+        return tuple(records)
+    if mixture_source is None or mixture_other_source is None or mixture_fraction is None:
+        return tuple(records[:limit])
+    if len(records) < limit:
+        raise ValueError(f"mixture selection requires {limit} records, found {len(records)}")
 
-    if config.record_limit is None:
-        return datasets
+    unexpected_sources = sorted(
+        {
+            record.source
+            for record in records
+            if record.source not in {mixture_source, mixture_other_source}
+        }
+    )
+    if unexpected_sources:
+        raise ValueError("unexpected mixture source(s): " + ", ".join(unexpected_sources))
+
+    source_records = sorted(
+        (record for record in records if record.source == mixture_source),
+        key=lambda record: record.id,
+    )
+    other_records = sorted(
+        (record for record in records if record.source == mixture_other_source),
+        key=lambda record: record.id,
+    )
+    source_count = round(limit * mixture_fraction)
+    other_count = limit - source_count
+    if len(source_records) < source_count or len(other_records) < other_count:
+        raise ValueError(
+            "dataset cannot satisfy configured mixture; "
+            f"requires {source_count} {mixture_source!r} and "
+            f"{other_count} {mixture_other_source!r} records"
+        )
+
+    rng = random.Random(seed)
+    rng.shuffle(source_records)
+    rng.shuffle(other_records)
+    selected = source_records[:source_count] + other_records[:other_count]
+    rng.shuffle(selected)
+    return tuple(selected)
+
+
+def _limit_dataset_split(config: ExperimentConfig, datasets: DatasetSplit) -> DatasetSplit:
+    """Apply deterministic, configuration-bound limits and optional source mixing."""
+
+    validation_limit = (
+        config.validation_record_limit
+        if config.validation_record_limit is not None
+        else config.record_limit
+    )
     return DatasetSplit(
-        train=datasets.train[: config.record_limit],
-        validation=datasets.validation[: config.record_limit],
+        train=_select_mixture(
+            datasets.train,
+            limit=config.record_limit,
+            seed=config.seed,
+            mixture_source=config.mixture_source,
+            mixture_other_source=config.mixture_other_source,
+            mixture_fraction=config.mixture_fraction,
+        ),
+        validation=_select_mixture(
+            datasets.validation,
+            limit=validation_limit,
+            seed=config.seed + 1,
+            mixture_source=config.mixture_source,
+            mixture_other_source=config.mixture_other_source,
+            mixture_fraction=config.mixture_fraction,
+        ),
     )
 
 
@@ -275,6 +345,8 @@ def _package_versions() -> dict[str, str]:
 
 
 def _runtime_evidence_state(config: ExperimentConfig) -> str:
+    if config.evidence_state is not None:
+        return config.evidence_state
     return "smoke_test_verified" if config.name == "smoke" else "8b_gpu_measured"
 
 
@@ -579,7 +651,6 @@ def build_condition_manifest(
         raise ValueError(
             "condition manifest caller revision does not match the generation revision"
         )
-    generation_rows = [asdict(generation) for generation in generations]
     inference_payload = {
         "model_id": config.model_id,
         "model_revision": actual_revision,
@@ -592,7 +663,7 @@ def build_condition_manifest(
         evaluation_hash=_frozen_evaluation_hash(),
         case_ids=tuple(generation.case_id for generation in generations),
         inference_config_hash=_sha256(canonical_json(inference_payload)),
-        generation_hash=_sha256(canonical_json(generation_rows)),
+        generation_hash=generation_artifact_hash(generations),
         gpu=gpu.to_dict(),
         runtime_seconds=runtime_seconds,
         peak_vram_gb=peak_vram_gb,

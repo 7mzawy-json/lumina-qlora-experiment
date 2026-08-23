@@ -93,13 +93,22 @@ def _manifest(path: Path | None, output: Path, summary: ResultSummary) -> Mappin
     combined_path = output / "evidence-manifest.json"
     base_path = output / "base-manifest.json"
     adapter_path = output / f"{summary.adapter_condition}-manifest.json"
-    if summary.evidence_state == "8b_gpu_measured":
+    if summary.evidence_state in {"8b_gpu_measured", "8b_pilot_measured"}:
         if not base_path.is_file() or not adapter_path.is_file():
             raise ValueError(
                 "measured evidence requires base and adapter source condition manifests"
             )
+        training_manifest = None
+        if summary.evidence_state == "8b_pilot_measured":
+            training_path = output / "run-manifest.json"
+            if not training_path.is_file():
+                raise ValueError("pilot evidence requires the source training run manifest")
+            training_manifest = _load_json(training_path)
         derived = combine_condition_manifests(
-            _load_json(base_path), _load_json(adapter_path), summary
+            _load_json(base_path),
+            _load_json(adapter_path),
+            summary,
+            training_manifest=training_manifest,
         )
         stored_path = path or combined_path
         if stored_path.is_file() and canonical_json(_load_json(stored_path)) != canonical_json(
@@ -118,7 +127,15 @@ def _manifest(path: Path | None, output: Path, summary: ResultSummary) -> Mappin
 
 def _summary_payload(summary: ResultSummary) -> dict[str, object]:
     payload = asdict(summary)
-    payload["decision"] = asdict(evaluate_success(summary))
+    if summary.evidence_state == "8b_pilot_measured":
+        payload["decision"] = {
+            "status": "not_evaluated",
+            "passed": None,
+            "criteria": {},
+            "reasons": ["bounded_8b_pilot"],
+        }
+    else:
+        payload["decision"] = asdict(evaluate_success(summary))
     return payload
 
 
@@ -204,8 +221,11 @@ def _write_metrics_csv(summary: ResultSummary, path: Path) -> None:
 def _verify_existing(args: argparse.Namespace) -> int:
     metrics_path = args.output / "metrics.json"
     report_path = args.output / "report.md"
-    summary = _summary_from_payload(_load_json(metrics_path))
-    if summary.evidence_state == "8b_gpu_measured":
+    metrics_payload = _load_json(metrics_path)
+    summary = _summary_from_payload(metrics_payload)
+    if canonical_json(metrics_payload) != canonical_json(_summary_payload(summary)):
+        raise ValueError("existing metrics.json payload is not the canonical summary payload")
+    if summary.evidence_state in {"8b_gpu_measured", "8b_pilot_measured"}:
         missing = [
             name
             for name, value in (
@@ -269,7 +289,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = render_report(summary, manifest)
 
     args.output.mkdir(parents=True, exist_ok=True)
-    if summary.evidence_state == "8b_gpu_measured":
+    if summary.evidence_state in {"8b_gpu_measured", "8b_pilot_measured"}:
         (args.output / "evidence-manifest.json").write_text(
             f"{canonical_json(manifest)}\n",
             encoding="utf-8",

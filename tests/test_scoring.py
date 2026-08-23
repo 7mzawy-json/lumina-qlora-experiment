@@ -1,7 +1,9 @@
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
+import lumina_experiment.scoring as scoring
 from lumina_experiment.contracts import EvalCase, Generation
 from lumina_experiment.scoring import (
     load_eval_directory,
@@ -158,3 +160,36 @@ def test_load_eval_directory_rejects_duplicate_ids(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="duplicate evaluation id"):
         load_eval_directory(tmp_path)
+
+
+def test_balanced_pilot_selection_is_reproducible_and_covers_every_capability() -> None:
+    capabilities = (
+        "instruction",
+        "json",
+        "knowledge",
+        "programming",
+        "reasoning",
+        "safety",
+        "summarization",
+        "writing",
+    )
+    cases = tuple(
+        EvalCase(
+            id=f"{capability}-{index:03d}",
+            capability=capability,
+            prompt=f"{capability} prompt {index}",
+            scorer="rubric",
+        )
+        for capability in capabilities
+        for index in range(1, 6)
+    )
+    selector = getattr(scoring, "select_balanced_cases", None)
+
+    assert callable(selector)
+    selected = selector(cases, limit=24, seed=42)
+    reversed_selected = selector(tuple(reversed(cases)), limit=24, seed=42)
+
+    assert [case.id for case in selected] == [case.id for case in reversed_selected]
+    assert Counter(case.capability for case in selected) == {
+        capability: 3 for capability in capabilities
+    }

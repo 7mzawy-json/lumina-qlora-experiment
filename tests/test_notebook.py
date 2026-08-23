@@ -20,9 +20,9 @@ def test_notebook_has_ordered_evidence_gates() -> None:
         "## 1. Runtime and dependency verification",
         "## 2. Repository and frozen-data verification",
         "## 3. Small-checkpoint smoke test",
-        "## 4. Untouched 8B baseline",
-        "## 5. Primary rank-16 QLoRA training",
-        "## 6. Adapted-model generation",
+        "## 4. Balanced 8B pilot baseline",
+        "## 5. Bounded rank-16 QLoRA pilot training",
+        "## 6. Pilot adapted-model generation",
         "## 7. Export and local verification",
         "## 8. Optional rank-8 ablation",
     ]
@@ -35,7 +35,7 @@ def test_notebook_keeps_github_token_in_headers_and_out_of_artifacts() -> None:
     assert 'userdata.get("GITHUB_TOKEN")' in source
     assert '"Authorization": f"Bearer {github_token}"' in source
     assert "del github_token" in source
-    assert "RUN_8B = False" in source
+    assert "RUN_8B_PILOT = False" in source
     assert "generate_condition(" in source
     assert "train_adapter(" in source
     assert not re.search(r"https?://[^\s/@:]+:[^\s/@]+@", source)
@@ -98,7 +98,8 @@ def test_notebook_rehydrates_hf_token_only_in_enabled_ablation_and_finally_clear
     assert 'os.environ["HF_TOKEN"] = ablation_hf_token' in ablation
     assert "del ablation_hf_token" in ablation
     assert "try:" in ablation
-    assert "ablation_run = train_adapter(ablation_config, primary_datasets)" in ablation
+    assert "ablation_run = train_adapter(" in ablation
+    assert "ablation_config, pilot_datasets, model_revision=pilot_model_revision" in ablation
     assert 'finally:\n        os.environ.pop("HF_TOKEN", None)' in ablation
     assert ablation.index("del ablation_hf_token") < ablation.index("try:")
     assert ablation.index("try:") < ablation.index("finally:")
@@ -215,5 +216,20 @@ def test_notebook_resolves_each_model_once_and_passes_immutable_revisions() -> N
     source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
 
     assert "smoke_model_revision = resolve_hub_revision(smoke_config.model_id)" in source
+    assert "pilot_model_revision = resolve_hub_revision(pilot_config.model_id)" in source
     assert "model_revision=smoke_model_revision" in source
-    assert "model_revision=primary_model_revision" in source
+    assert "model_revision=pilot_model_revision" in source
+
+
+def test_notebook_runs_balanced_pilot_and_exports_its_training_manifest() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    assert 'Path("configs/pilot-r16.yaml")' in source
+    assert "select_balanced_cases(" in source
+    assert "limit=pilot_config.eval_case_limit" in source
+    assert "pilot_run = train_adapter(" in source
+    assert "canonical_json(pilot_run)" in source
+    assert 'Path("results/raw/pilot-r16/run-manifest.json")' in source
+    assert "adapted_started = time.monotonic()" in source
+    assert "runtime_seconds=time.monotonic() - adapted_started" in source
+    assert 'runtime_seconds=float(pilot_run.artifacts["runtime_seconds"])' not in source

@@ -15,6 +15,7 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_KEYS = ("model_id", "dataset_id")
 REPOSITORY_CONFIGS = (
     Path("configs/primary-r16.yaml"),
+    Path("configs/pilot-r16.yaml"),
     Path("configs/smoke.yaml"),
     Path("configs/data.yaml"),
 )

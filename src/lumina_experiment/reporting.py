@@ -9,15 +9,24 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from lumina_experiment.config import load_experiment_config
 from lumina_experiment.contracts import (
     ConditionManifest,
     EvalCase,
     Generation,
     GpuProbe,
+    RunManifest,
     canonical_json,
+    generation_artifact_hash,
+)
+from lumina_experiment.gpu import (
+    _config_hash,
+    _dataset_hash,
+    _limit_dataset_split,
+    load_frozen_dataset_split,
 )
 from lumina_experiment.review import build_blind_pairs, generations_from_scored_rows
-from lumina_experiment.scoring import load_eval_directory, score_case
+from lumina_experiment.scoring import load_eval_directory, score_case, select_balanced_cases
 from lumina_experiment.statistics import (
     Interval,
     ResultSummary,
@@ -39,6 +48,9 @@ REQUIRED_RUN_FIELDS = (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TRUSTED_FREEZE_FILE = REPO_ROOT / "data" / "eval" / "FROZEN.sha256"
 TRUSTED_CASES_DIR = REPO_ROOT / "data" / "eval" / "cases"
+PILOT_CONFIG_FILE = REPO_ROOT / "configs" / "pilot-r16.yaml"
+FROZEN_DATASET_DIR = REPO_ROOT / "data" / "processed"
+MEASURED_EVIDENCE_STATES = frozenset({"8b_gpu_measured", "8b_pilot_measured"})
 
 CAPABILITY_METRICS = {
     "instruction": ("instruction_following", frozenset({"constraint_adherence"}), True),
@@ -120,36 +132,22 @@ def score_artifact_hash(rows: Sequence[Mapping[str, object]]) -> str:
     return _canonical_hash(ordered)
 
 
-def generation_artifact_hash(generations: Sequence[Generation]) -> str:
-    records = [
-        {
-            "case_id": generation.case_id,
-            "condition": generation.condition,
-            "output": generation.output,
-            "evidence_state": generation.evidence_state,
-        }
-        for generation in sorted(generations, key=lambda item: item.case_id)
-    ]
-    return _canonical_hash(records)
-
-
 def generation_hashes_from_scored_records(
     rows: Sequence[Mapping[str, object]], adapter_condition: str
 ) -> dict[str, str]:
     hashes: dict[str, str] = {}
     for alias, condition in (("base", "base"), ("adapter", adapter_condition)):
-        records = [
-            {
-                "case_id": str(row.get("case_id")),
-                "condition": str(row.get("condition")),
-                "output": row.get("output"),
-                "evidence_state": str(row.get("evidence_state")),
-            }
+        generations = [
+            Generation(
+                case_id=str(row.get("case_id")),
+                condition=str(row.get("condition")),
+                output=str(row.get("output")),
+                evidence_state=str(row.get("evidence_state")),
+            )
             for row in rows
             if row.get("condition") == condition
         ]
-        records.sort(key=lambda record: str(record["case_id"]))
-        hashes[alias] = _canonical_hash(records)
+        hashes[alias] = generation_artifact_hash(generations)
     return hashes
 
 
@@ -408,12 +406,18 @@ def _validate_measured_review_packet(
     reviews: Sequence[Mapping[str, object]],
     private_key: Mapping[str, Mapping[str, str]],
     review_seed: int | None,
+    *,
+    sample_size: int,
 ) -> None:
     if review_seed != 42:
         raise ValueError("measured concealed review requires private-key seed 42")
-    expected = build_blind_pairs(generations_from_scored_rows(rows), seed=42, sample_size=42)
+    expected = build_blind_pairs(
+        generations_from_scored_rows(rows), seed=42, sample_size=sample_size
+    )
     if len(reviews) != len(expected.items):
-        raise ValueError("concealed review packet mismatch: expected exactly 42 ordered rows")
+        raise ValueError(
+            f"concealed review packet mismatch: expected exactly {sample_size} ordered rows"
+        )
     for index, (review, item) in enumerate(zip(reviews, expected.items, strict=True), 1):
         if set(review) != REVIEW_FIELDS:
             raise ValueError(
@@ -491,7 +495,7 @@ def summarize_scored_records(
     resamples: int = 10_000,
     review_seed: int | None = None,
 ) -> ResultSummary:
-    if evidence_state == "8b_gpu_measured":
+    if evidence_state in MEASURED_EVIDENCE_STATES:
         rows = verify_measured_scored_records(rows)
     adapter_condition, scored_ids, scored_counts, generated_diagnostic_ids = _score_provenance(
         rows, evidence_state
@@ -506,7 +510,9 @@ def summarize_scored_records(
         if not primary_flags[name]
     }
     if evidence_state == "8b_gpu_measured":
-        _validate_measured_review_packet(rows, reviews, private_key, review_seed)
+        _validate_measured_review_packet(rows, reviews, private_key, review_seed, sample_size=42)
+    elif evidence_state == "8b_pilot_measured":
+        _validate_measured_review_packet(rows, reviews, private_key, review_seed, sample_size=21)
     (
         adapter_wins,
         base_wins,
@@ -543,6 +549,8 @@ def combine_condition_manifests(
     base_manifest: Mapping[str, object],
     adapter_manifest: Mapping[str, object],
     summary: ResultSummary,
+    *,
+    training_manifest: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Combine Task 8 condition manifests into the report evidence contract."""
     base = ConditionManifest.from_dict(base_manifest)
@@ -595,14 +603,213 @@ def combine_condition_manifests(
             "score_hash": summary.score_hash,
         },
     }
+    if training_manifest is not None:
+        combined["training_manifest"] = dict(training_manifest)
     validate_evidence(summary, combined)
     return combined
+
+
+def _validate_pilot_evidence(summary: ResultSummary, manifest: Mapping[str, object]) -> None:
+    if not TRUSTED_FREEZE_FILE.is_file():
+        raise ValueError(f"evaluation freeze file does not exist: {TRUSTED_FREEZE_FILE}")
+    frozen_hash = TRUSTED_FREEZE_FILE.read_text(encoding="utf-8").strip()
+    if manifest.get("evaluation_hash") != frozen_hash:
+        raise ValueError("evaluation hash does not match FROZEN.sha256")
+
+    config = load_experiment_config(PILOT_CONFIG_FILE)
+    if config.name != "pilot-r16" or config.evidence_state != "8b_pilot_measured":
+        raise ValueError("pilot configuration identity does not match measured evidence")
+    if config.eval_case_limit != 24:
+        raise ValueError("pilot configuration must select exactly 24 evaluation cases")
+    expected_cases = select_balanced_cases(
+        load_eval_directory(TRUSTED_CASES_DIR),
+        limit=config.eval_case_limit,
+        seed=config.seed,
+    )
+    expected_case_ids = tuple(case.id for case in expected_cases)
+    expected_scored_ids = {case.id for case in expected_cases if case.capability != "safety"}
+    expected_diagnostic_ids = {case.id for case in expected_cases if case.capability == "safety"}
+    expected_capabilities = {
+        case.id: case.capability for case in expected_cases if case.capability != "safety"
+    }
+
+    expected_metric_names = {CAPABILITY_METRICS[capability][0] for capability in CAPABILITY_METRICS}
+    if set(summary.primary_deltas) | set(summary.secondary_deltas) != expected_metric_names:
+        raise ValueError("pilot summary requires the exact preregistered metric set")
+    if set(summary.intervals) != expected_metric_names:
+        raise ValueError("pilot summary requires an interval for every preregistered metric")
+    for name, interval in summary.intervals.items():
+        values = (interval.difference_pp, interval.lower_pp, interval.upper_pp)
+        if interval.resamples != 10_000:
+            raise ValueError(f"pilot interval {name} requires exactly 10,000 resamples")
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError(f"pilot interval {name} must contain finite values")
+        reported = summary.primary_deltas.get(name, summary.secondary_deltas.get(name))
+        if reported is None or not math.isclose(
+            interval.difference_pp, float(reported), rel_tol=0.0, abs_tol=1e-9
+        ):
+            raise ValueError(f"pilot interval {name} does not match its reported delta")
+
+    if set(summary.scored_case_ids) != {"base", "adapter"}:
+        raise ValueError("pilot summary must contain base and adapter scored case IDs")
+    for alias in ("base", "adapter"):
+        case_ids = summary.scored_case_ids[alias]
+        if (
+            summary.scored_case_counts.get(alias) != 21
+            or len(case_ids) != 21
+            or len(set(case_ids)) != 21
+            or set(case_ids) != expected_scored_ids
+        ):
+            raise ValueError("pilot summary must contain all 21 scored case IDs per condition")
+    if (
+        len(summary.review_case_ids) != 21
+        or len(set(summary.review_case_ids)) != 21
+        or set(summary.review_case_ids) != expected_scored_ids
+        or summary.review_case_capabilities != expected_capabilities
+        or summary.review_capability_counts != dict(Counter(expected_capabilities.values()))
+    ):
+        raise ValueError("pilot summary must bind the exact 21-case concealed review")
+    if (
+        len(summary.diagnostic_case_ids) != 3
+        or len(set(summary.diagnostic_case_ids)) != 3
+        or set(summary.diagnostic_case_ids) != expected_diagnostic_ids
+    ):
+        raise ValueError("pilot summary must contain the selected 3 safety diagnostics")
+    if any(set(diagnostic) - DIAGNOSTIC_FIELDS for diagnostic in summary.diagnostics):
+        raise ValueError("pilot diagnostics contain unsupported fields")
+    if {str(item["case_id"]) for item in summary.diagnostics} != expected_diagnostic_ids:
+        raise ValueError("pilot diagnostic annotations must match selected safety cases")
+    if set(summary.diagnostic_generation_case_ids) != {"base", "adapter"}:
+        raise ValueError("pilot summary must bind base and adapter safety generations")
+    for alias in ("base", "adapter"):
+        ids = summary.diagnostic_generation_case_ids[alias]
+        if len(ids) != 3 or len(set(ids)) != 3 or set(ids) != expected_diagnostic_ids:
+            raise ValueError("pilot summary must bind 3 safety generations per condition")
+
+    if summary.adapter_condition != config.name:
+        raise ValueError("pilot adapter condition does not match pilot configuration")
+    summary_generation_hashes = {
+        name: _require_sha256(value, f"summary.generation_hashes.{name}")
+        for name, value in summary.generation_hashes.items()
+    }
+    if set(summary_generation_hashes) != {"base", "adapter"}:
+        raise ValueError("pilot summary generation hashes must contain base and adapter")
+    summary_score_hash = _require_sha256(summary.score_hash, "summary.score_hash")
+
+    conditions = _mapping(manifest.get("conditions"), "conditions")
+    if set(conditions) != {"base", "adapter"}:
+        raise ValueError("pilot conditions must contain exactly base and adapter")
+    condition_records = {
+        name: _mapping(conditions[name], f"conditions.{name}") for name in ("base", "adapter")
+    }
+    for name, record in condition_records.items():
+        raw_ids = tuple(
+            str(case_id)
+            for case_id in _sequence(record.get("case_ids"), f"conditions.{name}.case_ids")
+        )
+        if raw_ids != expected_case_ids:
+            raise ValueError("pilot conditions must contain the exact ordered 24-case subset")
+    if (
+        condition_records["base"].get("condition") != "base"
+        or condition_records["adapter"].get("condition") != config.name
+    ):
+        raise ValueError("pilot manifest condition names do not match the scored summary")
+    inference_hashes = {
+        _require_sha256(
+            record.get("inference_config_hash"),
+            f"conditions.{name}.inference_config_hash",
+        )
+        for name, record in condition_records.items()
+    }
+    if len(inference_hashes) != 1:
+        raise ValueError("pilot base and adapter inference configuration hashes must match")
+
+    run_manifest = _mapping(manifest.get("run_manifest"), "run_manifest")
+    for field in REQUIRED_RUN_FIELDS:
+        if field not in run_manifest or run_manifest[field] in (None, "", {}):
+            raise ValueError(f"run_manifest requires {field}")
+    GpuProbe.from_dict(_mapping(run_manifest["gpu"], "run_manifest.gpu"))
+    model_revision = str(run_manifest["model_revision"])
+    if len(model_revision) != 40 or any(
+        character not in "0123456789abcdefABCDEF" for character in model_revision
+    ):
+        raise ValueError("run_manifest model_revision must be an immutable 40-character SHA")
+    for field in ("runtime_seconds", "peak_vram_gb"):
+        value = run_manifest[field]
+        if isinstance(value, bool):
+            raise ValueError(f"run_manifest {field} must be a finite positive number")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"run_manifest {field} must be a finite positive number") from error
+        if not math.isfinite(numeric) or numeric <= 0:
+            raise ValueError(f"run_manifest {field} must be a finite positive number")
+    packages = _mapping(run_manifest["package_versions"], "package_versions")
+    if not packages or not all(
+        isinstance(name, str) and name.strip() and isinstance(version, str) and version.strip()
+        for name, version in packages.items()
+    ):
+        raise ValueError("run_manifest package_versions must contain non-empty strings")
+    adapter_hash = _require_sha256(run_manifest["adapter_hash"], "run_manifest.adapter_hash")
+    if _require_sha256(run_manifest["score_hash"], "run_manifest.score_hash") != summary_score_hash:
+        raise ValueError("pilot run manifest score hash does not match the scored summary")
+    run_generation_hashes = {
+        name: _require_sha256(value, f"run_manifest.generation_hashes.{name}")
+        for name, value in _mapping(run_manifest["generation_hashes"], "generation_hashes").items()
+    }
+    condition_hashes = {
+        name: _require_sha256(
+            condition_records[name].get("generation_hash"),
+            f"conditions.{name}.generation_hash",
+        )
+        for name in ("base", "adapter")
+    }
+    if (
+        run_generation_hashes != condition_hashes
+        or run_generation_hashes != summary_generation_hashes
+    ):
+        raise ValueError("pilot generation hashes do not bind all evidence artifacts")
+
+    training_payload = dict(_mapping(manifest.get("training_manifest"), "training_manifest"))
+    try:
+        training = RunManifest(**training_payload)
+    except TypeError as error:
+        raise ValueError("training_manifest fields do not match the run contract") from error
+    if training.evidence_state != summary.evidence_state:
+        raise ValueError("training evidence state does not match the pilot summary")
+    if training.model_id != config.model_id or training.model_revision != model_revision:
+        raise ValueError("training model identity does not match pilot inference")
+    if training.evaluation_hash != frozen_hash:
+        raise ValueError("training evaluation hash does not match FROZEN.sha256")
+    if training.config_hash != _config_hash(config):
+        raise ValueError("training configuration hash does not match pilot-r16.yaml")
+    selected_datasets = _limit_dataset_split(config, load_frozen_dataset_split(FROZEN_DATASET_DIR))
+    if training.dataset_hash != _dataset_hash(selected_datasets):
+        raise ValueError("training dataset hash does not match the deterministic pilot mixture")
+    if training.selected_checkpoint is None or not training.selected_checkpoint.endswith(
+        f"checkpoint-{config.max_steps}"
+    ):
+        raise ValueError("training selected checkpoint does not match the 16-step pilot")
+    if not training.validation_selection:
+        raise ValueError("training manifest requires validation-based checkpoint selection")
+    training_artifacts = _mapping(training.artifacts, "training_manifest.artifacts")
+    if (
+        _require_sha256(
+            training_artifacts.get("adapter_sha256"),
+            "training_manifest.artifacts.adapter_sha256",
+        )
+        != adapter_hash
+    ):
+        raise ValueError("training adapter hash does not match inference adapter hash")
 
 
 def validate_evidence(summary: ResultSummary, manifest: Mapping[str, object]) -> None:
     manifest_state = manifest.get("evidence_state")
     if manifest_state != summary.evidence_state:
         raise ValueError("summary and manifest evidence states do not match")
+    if summary.evidence_state == "8b_pilot_measured":
+        _validate_pilot_evidence(summary, manifest)
+        return
     if summary.evidence_state != "8b_gpu_measured":
         return
 
@@ -797,13 +1004,22 @@ def _metric_table(metrics: Mapping[str, float], intervals: Mapping[str, Interval
 def render_report(summary: ResultSummary, manifest: Mapping[str, object]) -> str:
     validate_evidence(summary, manifest)
     decision = evaluate_success(summary)
+    directional_pilot = summary.evidence_state == "8b_pilot_measured"
     lines = [
         "# Lumina Paired Evaluation Report",
         "",
         f"Evidence state: `{summary.evidence_state}`",
         "",
     ]
-    if summary.evidence_state != "8b_gpu_measured":
+    if summary.evidence_state == "8b_pilot_measured":
+        lines.extend(
+            [
+                "> Directional 8B pilot measurement; this report does not claim completion "
+                "of the full frozen benchmark.",
+                "",
+            ]
+        )
+    elif summary.evidence_state != "8b_gpu_measured":
         lines.extend(
             [
                 "> No validated 8B GPU measurement is claimed by this report.",
@@ -832,12 +1048,24 @@ def render_report(summary: ResultSummary, manifest: Mapping[str, object]) -> str
             f"{summary.writing_base_wins}; ties: {summary.writing_ties}; "
             f"adapter non-tied win rate: {win_rate:.1%}.",
             "",
-            "## Pre-registered success gate",
+            "## Full-benchmark success gate"
+            if directional_pilot
+            else "## Pre-registered success gate",
             "",
-            f"Decision: **{'PASS' if decision.passed else 'FAIL'}**",
+            (
+                "Decision: **NOT EVALUATED**"
+                if directional_pilot
+                else f"Decision: **{'PASS' if decision.passed else 'FAIL'}**"
+            ),
             "",
         ]
     )
-    for criterion, passed in decision.criteria.items():
-        lines.append(f"- {'PASS' if passed else 'FAIL'} — {criterion}")
+    if directional_pilot:
+        lines.append(
+            "The bounded pilot is reported descriptively; run the full frozen benchmark "
+            "before applying the pre-registered production decision gate."
+        )
+    else:
+        for criterion, passed in decision.criteria.items():
+            lines.append(f"- {'PASS' if passed else 'FAIL'} — {criterion}")
     return "\n".join(lines) + "\n"

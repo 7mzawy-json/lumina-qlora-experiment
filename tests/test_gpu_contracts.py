@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -27,6 +28,7 @@ from lumina_experiment.gpu import (
     verify_frozen_evaluation,
 )
 from lumina_experiment.isolation import freeze_files
+from lumina_experiment.reporting import generation_artifact_hash
 
 
 def primary_config():
@@ -43,10 +45,15 @@ def gpu(name: str, bf16: bool, vram_gb: float) -> GpuProbe:
     )
 
 
-def instruction_record(prefix: str, index: int) -> InstructionRecord:
+def instruction_record(
+    prefix: str,
+    index: int,
+    *,
+    source: str = "test-source",
+) -> InstructionRecord:
     return InstructionRecord(
         id=f"{prefix}-{index:03d}",
-        source="test-source",
+        source=source,
         license="Apache-2.0",
         capability="general",
         cluster_id=f"{prefix}-cluster-{index:03d}",
@@ -163,6 +170,55 @@ def test_smoke_record_limit_bounds_both_training_splits() -> None:
     assert [record.id for record in limited.validation] == [
         f"validation-{index:03d}" for index in range(50)
     ]
+
+
+def test_pilot_source_mixture_is_bounded_and_independent_of_input_order() -> None:
+    specific_source = "lumina-demonstration-authored"
+    general_source = "OpenAssistant/oasst1"
+    train = tuple(
+        instruction_record("train-specific", index, source=specific_source) for index in range(100)
+    ) + tuple(
+        instruction_record("train-general", index, source=general_source) for index in range(300)
+    )
+    validation = tuple(
+        instruction_record("validation-specific", index, source=specific_source)
+        for index in range(100)
+    ) + tuple(
+        instruction_record("validation-general", index, source=general_source)
+        for index in range(300)
+    )
+    config = load_experiment_config(Path("configs/pilot-r16.yaml"))
+    limiter = getattr(gpu_runtime, "_limit_dataset_split", None)
+
+    assert callable(limiter)
+    selected = limiter(config, DatasetSplit(train=train, validation=validation))
+    reversed_selected = limiter(
+        config,
+        DatasetSplit(train=tuple(reversed(train)), validation=tuple(reversed(validation))),
+    )
+
+    assert len(selected.train) == 256
+    assert len(selected.validation) == 40
+    assert Counter(record.source for record in selected.train) == {
+        specific_source: 77,
+        general_source: 179,
+    }
+    assert Counter(record.source for record in selected.validation) == {
+        specific_source: 12,
+        general_source: 28,
+    }
+    assert [record.id for record in selected.train] == [
+        record.id for record in reversed_selected.train
+    ]
+    assert [record.id for record in selected.validation] == [
+        record.id for record in reversed_selected.validation
+    ]
+
+    unexpected_train = train + (
+        instruction_record("train-unexpected", 0, source="unexpected/source"),
+    )
+    with pytest.raises(ValueError, match="unexpected mixture source"):
+        limiter(config, DatasetSplit(train=unexpected_train, validation=validation))
 
 
 def test_assistant_mask_preflight_uses_trl_training_template(monkeypatch) -> None:
@@ -471,6 +527,28 @@ def test_condition_manifest_rejects_unchecked_caller_model_revision() -> None:
             model_revision="b" * 40,
             package_versions={"torch": "2.7.0"},
         )
+
+
+def test_condition_manifest_generation_hash_matches_scored_artifact_contract() -> None:
+    generation = Generation(
+        case_id="instruction-001",
+        condition="base",
+        output="4",
+        evidence_state="smoke_test_verified",
+        metadata={"model_revision": "a" * 40},
+    )
+
+    manifest = build_condition_manifest(
+        primary_config(),
+        [generation],
+        gpu=gpu("Tesla T4", False, 15.0),
+        runtime_seconds=1.0,
+        peak_vram_gb=1.0,
+        model_revision="a" * 40,
+        package_versions={"torch": "2.7.0"},
+    )
+
+    assert manifest.generation_hash == generation_artifact_hash([generation])
 
 
 @pytest.mark.parametrize("invalid_metadata", [{}, {"model_revision": 123}])

@@ -14,9 +14,9 @@ HEADINGS = (
     "## 1. Runtime and dependency verification",
     "## 2. Repository and frozen-data verification",
     "## 3. Small-checkpoint smoke test",
-    "## 4. Untouched 8B baseline",
-    "## 5. Primary rank-16 QLoRA training",
-    "## 6. Adapted-model generation",
+    "## 4. Balanced 8B pilot baseline",
+    "## 5. Bounded rank-16 QLoRA pilot training",
+    "## 6. Pilot adapted-model generation",
     "## 7. Export and local verification",
     "## 8. Optional rank-8 ablation",
 )
@@ -191,16 +191,16 @@ from lumina_experiment.gpu import (
 
 frozen_hash = verify_frozen_evaluation()
 dataset_hashes = verify_frozen_dataset_split(Path("data/processed"))
-primary_config = load_experiment_config(Path("configs/primary-r16.yaml"))
+pilot_config = load_experiment_config(Path("configs/pilot-r16.yaml"))
 smoke_config = load_experiment_config(Path("configs/smoke.yaml"))
-primary_model_revision = resolve_hub_revision(primary_config.model_id)
+pilot_model_revision = resolve_hub_revision(pilot_config.model_id)
 smoke_model_revision = resolve_hub_revision(smoke_config.model_id)
 print(
     {
         "repository_commit": repository_commit,
         "evaluation_hash": frozen_hash,
         "dataset_hashes": dataset_hashes,
-        "model_revision": primary_model_revision,
+        "model_revision": pilot_model_revision,
     }
 )"""
         ),
@@ -214,7 +214,8 @@ print(
     load_frozen_dataset_split,
     train_adapter,
 )
-from lumina_experiment.scoring import load_eval_directory
+from lumina_experiment.contracts import canonical_json
+from lumina_experiment.scoring import load_eval_directory, select_balanced_cases
 
 smoke_datasets = load_frozen_dataset_split(Path("data/processed"))
 smoke_cases = load_eval_directory(Path("data/eval/cases"))[: smoke_config.eval_case_limit]
@@ -240,68 +241,78 @@ export_condition_manifest(smoke_condition, Path("results/raw/smoke/manifest.json
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[4]),
         _code(
-            """RUN_8B = False
-if not RUN_8B:
+            """RUN_8B_PILOT = False
+if not RUN_8B_PILOT:
     gate_message = (
-        "Change RUN_8B = False to RUN_8B = True only after the smoke artifacts "
-        "pass local verification."
+        "Change RUN_8B_PILOT = False to RUN_8B_PILOT = True only after the smoke "
+        "artifacts pass local verification."
     )
     raise RuntimeError(
         gate_message
     )
 
 all_cases = load_eval_directory(Path("data/eval/cases"))
+pilot_cases = select_balanced_cases(
+    all_cases,
+    limit=pilot_config.eval_case_limit,
+    seed=pilot_config.seed,
+)
 import time
 import torch
 
 torch.cuda.reset_peak_memory_stats()
 base_started = time.monotonic()
 base_generations = generate_condition(
-    primary_config, all_cases, model_revision=primary_model_revision
+    pilot_config, pilot_cases, model_revision=pilot_model_revision
 )
 export_generations(base_generations, Path("results/raw/base/generations.jsonl"))
 base_condition = build_condition_manifest(
-    primary_config,
+    pilot_config,
     base_generations,
     gpu=gpu,
     runtime_seconds=time.monotonic() - base_started,
     peak_vram_gb=torch.cuda.max_memory_allocated() / (1024**3),
-    model_revision=primary_model_revision,
+    model_revision=pilot_model_revision,
     package_versions=package_versions,
 )
 export_condition_manifest(base_condition, Path("results/raw/base/manifest.json"))"""
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[5]),
         _code(
-            """primary_datasets = load_frozen_dataset_split(Path("data/processed"))
-primary_run = train_adapter(
-    primary_config, primary_datasets, model_revision=primary_model_revision
+            """pilot_datasets = load_frozen_dataset_split(Path("data/processed"))
+pilot_run = train_adapter(
+    pilot_config, pilot_datasets, model_revision=pilot_model_revision
 )
-if primary_run.selected_checkpoint is None or not primary_run.validation_selection:
-    raise RuntimeError("training did not produce validation-only checkpoint selection evidence")"""
+if pilot_run.selected_checkpoint is None or not pilot_run.validation_selection:
+    raise RuntimeError("training did not produce validation-only checkpoint selection evidence")
+pilot_run_path = Path("results/raw/pilot-r16/run-manifest.json")
+pilot_run_path.parent.mkdir(parents=True, exist_ok=True)
+pilot_run_path.write_text(canonical_json(pilot_run) + "\\n", encoding="utf-8")"""
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[6]),
         _code(
-            """adapted_generations = generate_condition(
-    primary_config,
-    all_cases,
-    Path(primary_run.selected_checkpoint),
-    model_revision=primary_model_revision,
+            """torch.cuda.reset_peak_memory_stats()
+adapted_started = time.monotonic()
+adapted_generations = generate_condition(
+    pilot_config,
+    pilot_cases,
+    Path(pilot_run.selected_checkpoint),
+    model_revision=pilot_model_revision,
 )
 if [item.case_id for item in base_generations] != [item.case_id for item in adapted_generations]:
     raise RuntimeError("base and adapter generation case order differs")
-export_generations(adapted_generations, Path("results/raw/primary-r16/generations.jsonl"))
-primary_condition = build_condition_manifest(
-    primary_config,
+export_generations(adapted_generations, Path("results/raw/pilot-r16/generations.jsonl"))
+pilot_condition = build_condition_manifest(
+    pilot_config,
     adapted_generations,
     gpu=gpu,
-    runtime_seconds=float(primary_run.artifacts["runtime_seconds"]),
-    peak_vram_gb=float(primary_run.artifacts["peak_vram_gb"]),
-    model_revision=primary_model_revision,
+    runtime_seconds=time.monotonic() - adapted_started,
+    peak_vram_gb=torch.cuda.max_memory_allocated() / (1024**3),
+    model_revision=pilot_model_revision,
     package_versions=package_versions,
-    adapter_hash=primary_run.artifacts["adapter_sha256"] or None,
+    adapter_hash=pilot_run.artifacts["adapter_sha256"] or None,
 )
-export_condition_manifest(primary_condition, Path("results/raw/primary-r16/manifest.json"))"""
+export_condition_manifest(pilot_condition, Path("results/raw/pilot-r16/manifest.json"))"""
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[7]),
         _code(
@@ -327,7 +338,9 @@ if RUN_ABLATION:
     del ablation_hf_token
     try:
         ablation_config = load_experiment_config(Path("configs/ablation-r8.yaml"))
-        ablation_run = train_adapter(ablation_config, primary_datasets)
+        ablation_run = train_adapter(
+            ablation_config, pilot_datasets, model_revision=pilot_model_revision
+        )
         print({"selected_checkpoint": ablation_run.selected_checkpoint})
     finally:
         os.environ.pop("HF_TOKEN", None)"""

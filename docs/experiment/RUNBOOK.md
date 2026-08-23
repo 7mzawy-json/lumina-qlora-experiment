@@ -2,7 +2,7 @@
 
 ## Local preflight and processed-data package
 
-Use Python 3.11 and the development virtual environment. Public Hugging Face repository metadata is resolved without a token; do not download model weights during revision pinning.
+Use Python 3.11 or newer and the development virtual environment. Public Hugging Face repository metadata is resolved without a token; do not download model weights during revision pinning.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\pin_revisions.py --output configs\revisions.yaml
@@ -41,7 +41,7 @@ requirements with `--no-deps` to preserve Colab's CUDA PyTorch, then runs
 use a manual, unrecorded package-install workaround.
 
 1. Select a GPU runtime. An L4, A10G, RTX 4090, or another 24 GB GPU is preferred; record a T4 fallback as a deviation.
-2. In Colab Secrets, add `GITHUB_REPOSITORY`, `GITHUB_COMMIT`, a read-only `GITHUB_TOKEN` authorized for the private repository, and `HF_TOKEN` (the secret name is exactly `HF_TOKEN`). Set `GITHUB_COMMIT` to the exact 40-character SHA of the commit just pushed for this run; it must not be a branch name or `HEAD`. Enter all secret values directly in the Colab Secrets UI, never in chat or logs. Never print a secret or place one in a notebook output.
+2. In Colab Secrets, add `GITHUB_REPOSITORY`, `GITHUB_COMMIT`, and `HF_TOKEN` (the secret name is exactly `HF_TOKEN`). The repository is public, so the notebook deliberately does not request a GitHub token. Set `GITHUB_COMMIT` to the exact 40-character SHA of the commit just pushed for this run; it must not be a branch name or `HEAD`. Enter secret values directly in the Colab Secrets UI, never in chat or logs. Never print a secret or place one in a notebook output.
 3. Upload/open `notebooks/lumina_qlora_demo.ipynb`. Run the dependency/repository cell, restart after dependency installation, then rerun from repository verification.
 4. Before the notebook's smoke or 8B sections, use its processed-data import cell. For browser upload, upload the exact `%TEMP%\lumina-processed.zip` file when prompted. For Drive, set `USE_DRIVE_PROCESSED_ARCHIVE = True`, mount Drive, and place it at `/content/drive/MyDrive/lumina-processed.zip`.
 5. The import cell validates archive members, copies them only to `PROJECT_ROOT/data/processed`, refuses an existing destination, then deletes the uploaded working copy. The next repository/freeze cell must verify `verify_frozen_dataset_split(Path("data/processed"))` before smoke work continues.

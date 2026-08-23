@@ -1,3 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumina-qlora-experiment"
+version = "0.1.0"
+description = "Reproducible QLoRA adaptation and paired evaluation demonstration for Lumina"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
@@ -6,6 +20,7 @@ addopts = "-ra --strict-markers"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

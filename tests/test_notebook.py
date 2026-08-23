@@ -28,13 +28,13 @@ def test_notebook_has_ordered_evidence_gates() -> None:
     ]
 
 
-def test_notebook_keeps_github_token_in_headers_and_out_of_artifacts() -> None:
+def test_notebook_downloads_public_repository_without_github_credentials() -> None:
     notebook = nbformat.read(NOTEBOOK_PATH, as_version=4)
     source = "\n".join(cell.source for cell in notebook.cells if cell.cell_type == "code")
 
-    assert 'userdata.get("GITHUB_TOKEN")' in source
-    assert '"Authorization": f"Bearer {github_token}"' in source
-    assert "del github_token" in source
+    assert 'userdata.get("GITHUB_TOKEN")' not in source
+    assert '"Authorization"' not in source
+    assert "github_token" not in source
     assert "RUN_8B_PILOT = False" in source
     assert "generate_condition(" in source
     assert "train_adapter(" in source
@@ -42,11 +42,12 @@ def test_notebook_keeps_github_token_in_headers_and_out_of_artifacts() -> None:
     assert not re.search(r"(?:ghp_|github_pat_|hf_)[A-Za-z0-9]{20,}", source)
 
 
-def test_notebook_requires_all_colab_secrets_and_wires_hf_token_only_in_memory() -> None:
+def test_notebook_requires_only_public_repo_coordinates_and_hf_token() -> None:
     source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
 
-    for secret_name in ("GITHUB_REPOSITORY", "GITHUB_COMMIT", "GITHUB_TOKEN", "HF_TOKEN"):
+    for secret_name in ("GITHUB_REPOSITORY", "GITHUB_COMMIT", "HF_TOKEN"):
         assert f'userdata.get("{secret_name}")' in source
+    assert 'userdata.get("GITHUB_TOKEN")' not in source
     assert 'hf_token = userdata.get("HF_TOKEN")' in source
     assert "not hf_token or not hf_token.strip()" in source
     assert 'os.environ["HF_TOKEN"] = hf_token' in source

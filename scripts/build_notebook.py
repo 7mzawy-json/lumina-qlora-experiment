@@ -55,10 +55,9 @@ torch_before = {"version": torch.__version__, "cuda": torch.version.cuda}
 
 github_repository = userdata.get("GITHUB_REPOSITORY")
 requested_commit = userdata.get("GITHUB_COMMIT")
-github_token = userdata.get("GITHUB_TOKEN")
 hf_token = userdata.get("HF_TOKEN")
-if not github_repository or not github_token:
-    raise RuntimeError("Set GITHUB_REPOSITORY and GITHUB_TOKEN in Colab Secrets before continuing.")
+if not github_repository:
+    raise RuntimeError("Set GITHUB_REPOSITORY in Colab Secrets before continuing.")
 if (
     not isinstance(requested_commit, str)
     or re.fullmatch(r"[0-9a-fA-F]{40}", requested_commit) is None
@@ -69,10 +68,8 @@ if not hf_token or not hf_token.strip():
 os.environ["HF_TOKEN"] = hf_token
 del hf_token
 
-headers = {"Authorization": f"Bearer {github_token}", "Accept": "application/vnd.github+json"}
 commit_response = requests.get(
     f"https://api.github.com/repos/{github_repository}/commits/{requested_commit}",
-    headers=headers,
     timeout=30,
 )
 commit_response.raise_for_status()
@@ -82,7 +79,6 @@ if not isinstance(verified_commit, str) or verified_commit != requested_commit:
 repository_commit = verified_commit
 archive_response = requests.get(
     f"https://api.github.com/repos/{github_repository}/zipball/{verified_commit}",
-    headers=headers,
     timeout=120,
 )
 archive_response.raise_for_status()
@@ -102,7 +98,7 @@ with zipfile.ZipFile(io.BytesIO(archive_response.content)) as archive:
 extracted = workspace.parent / roots.pop()
 extracted.rename(workspace)
 
-del github_token, headers, archive_response, commit_response
+del archive_response, commit_response
 os.chdir(workspace)
 subprocess.run(
     [sys.executable, "-m", "pip", "install", "--no-deps", "-r", "requirements-gpu.txt"],

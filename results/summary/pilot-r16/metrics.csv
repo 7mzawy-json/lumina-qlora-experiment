@@ -1,0 +1,7 @@
+category,metric,delta_pp,lower_pp,upper_pp
+primary,instruction_following,-33.33333333333333,-33.33333333333333,-33.33333333333333
+primary,json_schema_validity,0.0,0.0,0.0
+secondary,knowledge,-33.33333333333333,-100.0,0.0
+secondary,programming,-33.33333333333333,-100.0,0.0
+secondary,reasoning,0.0,0.0,0.0
+secondary,summarization,-33.72527868315717,-100.0,10.528934275988478

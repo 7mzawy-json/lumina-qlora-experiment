@@ -12,7 +12,7 @@ instruction tuning, paired evaluation, concealed human review, and evidence expo
 [Open the Colab notebook](https://colab.research.google.com/github/7mzawy-json/lumina-qlora-experiment/blob/main/notebooks/lumina_qlora_demo.ipynb)
 or follow the complete [runbook](docs/experiment/RUNBOOK.md).
 
-## Measured pilot
+## Measured pilots
 
 The bounded pilot used `Qwen/Qwen3-8B-Base` at an immutable revision on a Tesla T4. It
 trained a rank-16 QLoRA adapter for 16 optimizer steps on 256 examples, selected the
@@ -24,40 +24,46 @@ the same deterministic inference configuration.
 | Training mixture | 30% demonstration-authored / 70% OASST1 |
 | LoRA configuration | rank 16, alpha 32, dropout 0.05, all-linear |
 | Quantization and runtime dtype | 4-bit NF4 with double quantization; FP16 fallback |
-| Learning rate | `2e-4` |
-| Selected validation loss | 1.4941 |
-| Adapter training time | 448.2 seconds |
+| Learning rate | `2e-4` (initial) / `1e-4` (controlled diagnostic) |
+| Selected validation loss | 1.4941 / 1.6397 |
+| Adapter training time | 448.2 / 482.5 seconds |
 | Peak VRAM during adapted evaluation | 12.58 GB |
 | Paired evaluation sample | 3 cases per capability; 24 per condition |
 
 ### Outcome
 
-| Capability metric | Adapter minus base | 95% paired bootstrap CI |
+| Capability metric | `2e-4` adapter minus base | `1e-4` adapter minus base |
 |---|---:|---:|
-| Instruction following | -33.33 pp | [-33.33, -33.33] |
-| JSON schema validity | 0.00 pp | [0.00, 0.00] |
-| Knowledge/Q&A | -33.33 pp | [-100.00, 0.00] |
-| Programming | -33.33 pp | [-100.00, 0.00] |
-| Reasoning | 0.00 pp | [0.00, 0.00] |
-| Summarization | -33.73 pp | [-100.00, 10.53] |
+| Instruction following | -33.33 pp | -22.22 pp |
+| JSON schema validity | 0.00 pp | 0.00 pp |
+| Knowledge/Q&A | -33.33 pp | -33.33 pp |
+| Programming | -33.33 pp | -33.33 pp |
+| Reasoning | 0.00 pp | 0.00 pp |
+| Summarization | -33.73 pp | +0.94 pp |
 
-The concealed writing comparison produced 0 adapter wins, 3 base wins, and 0 ties. No
-serious new failure was recorded in the three selected safety diagnostics. The production
-decision gate was deliberately **not evaluated** because the pilot contains only three
-cases per capability.
+The concealed writing comparison changed from 0 adapter wins / 3 base wins / 0 ties at
+`2e-4` to 0 / 1 / 2 at `1e-4`. No serious new failure was recorded in either run's three
+selected safety diagnostics. The production decision gate was deliberately **not
+evaluated** because each pilot contains only three cases per capability.
 
-This configuration is therefore rejected. The next controlled experiment should repeat
-the same bounded pilot while changing only the learning rate from `2e-4` to `1e-4`. That
-tests whether the observed regression was amplified by an aggressive learning rate before
-spending compute on a larger rank or data search. The full frozen benchmark should run only
-after a configuration clears this inexpensive screen.
+Lowering the learning rate did not recover overall performance: validation loss increased
+from 1.4941 to 1.6397, while the tiny paired evaluation showed directional mitigation in
+instruction following, summarization, and writing but no recovery in knowledge or
+programming. This isolates learning rate as insufficient to explain the initial regression.
+Both adapters are rejected at this screening stage. A subsequent search should jointly
+test learning rate, effective training steps, and data-mixture quality, then run the full
+frozen benchmark only after a candidate clears the bounded screen. These comparisons are
+diagnostic rather than statistically powered conclusions.
 
 The canonical result files are:
 
-- [paired report](results/summary/pilot-r16/report.md)
-- [machine-readable metrics](results/summary/pilot-r16/metrics.json)
-- [evidence manifest](results/summary/pilot-r16/evidence-manifest.json)
-- [training run manifest](results/summary/pilot-r16/run-manifest.json)
+- [`2e-4` paired report](results/summary/pilot-r16/report.md)
+- [`2e-4` machine-readable metrics](results/summary/pilot-r16/metrics.json)
+- [`2e-4` evidence manifest](results/summary/pilot-r16/evidence-manifest.json)
+- [`1e-4` paired report](results/summary/pilot-r16-lr1e4/report.md)
+- [`1e-4` machine-readable metrics](results/summary/pilot-r16-lr1e4/metrics.json)
+- [`1e-4` evidence manifest](results/summary/pilot-r16-lr1e4/evidence-manifest.json)
+- [`1e-4` training run manifest](results/summary/pilot-r16-lr1e4/run-manifest.json)
 - [local preflight record](results/summary/preflight.json)
 
 Raw generations, concealed-review keys, reviewer working files, processed datasets,

@@ -36,6 +36,7 @@ def test_notebook_downloads_public_repository_without_github_credentials() -> No
     assert '"Authorization"' not in source
     assert "github_token" not in source
     assert "RUN_8B_PILOT = False" in source
+    assert "RUN_LR_DIAGNOSTIC = False" in source
     assert "generate_condition(" in source
     assert "train_adapter(" in source
     assert not re.search(r"https?://[^\s/@:]+:[^\s/@]+@", source)
@@ -82,7 +83,7 @@ def test_notebook_clears_hf_token_environment_before_export_archive_is_construct
     source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
 
     cleanup = 'os.environ.pop("HF_TOKEN", None)'
-    archive = 'archive_path = Path("/content/lumina-results.zip")'
+    archive = 'archive_path = Path("/content") / f"lumina-{pilot_config.name}-results.zip"'
     assert cleanup in source
     assert source.index(cleanup) < source.index(archive)
     ablation = "RUN_ABLATION = False"
@@ -110,6 +111,21 @@ def test_notebook_generator_is_deterministic() -> None:
     assert nbformat.writes(build_notebook(), version=4) == nbformat.writes(
         build_notebook(), version=4
     )
+
+
+def test_notebook_selects_lr_diagnostic_without_relabeling_outputs() -> None:
+    source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
+
+    assert "RUN_LR_DIAGNOSTIC = False" in source
+    assert 'diagnostic_config_path = Path("configs/pilot-r16-lr1e4.yaml")' in source
+    assert 'standard_config_path = Path("configs/pilot-r16.yaml")' in source
+    assert "pilot_config_path = (" in source
+    assert "diagnostic_config_path if RUN_LR_DIAGNOSTIC else standard_config_path" in source
+    assert "pilot_config = load_experiment_config(pilot_config_path)" in source
+    assert 'pilot_result_dir = Path("results/raw") / pilot_config.name' in source
+    assert 'pilot_run_path = pilot_result_dir / "run-manifest.json"' in source
+    assert 'pilot_result_dir / "generations.jsonl"' in source
+    assert 'pilot_result_dir / "manifest.json"' in source
 
 
 def test_notebook_verifies_freezes_and_preserves_colab_torch() -> None:
@@ -225,12 +241,12 @@ def test_notebook_resolves_each_model_once_and_passes_immutable_revisions() -> N
 def test_notebook_runs_balanced_pilot_and_exports_its_training_manifest() -> None:
     source = "\n".join(cell.source for cell in build_notebook().cells if cell.cell_type == "code")
 
-    assert 'Path("configs/pilot-r16.yaml")' in source
+    assert 'standard_config_path = Path("configs/pilot-r16.yaml")' in source
     assert "select_balanced_cases(" in source
     assert "limit=pilot_config.eval_case_limit" in source
     assert "pilot_run = train_adapter(" in source
     assert "canonical_json(pilot_run)" in source
-    assert 'Path("results/raw/pilot-r16/run-manifest.json")' in source
+    assert 'pilot_run_path = pilot_result_dir / "run-manifest.json"' in source
     assert "adapted_started = time.monotonic()" in source
     assert "runtime_seconds=time.monotonic() - adapted_started" in source
     assert 'runtime_seconds=float(pilot_run.artifacts["runtime_seconds"])' not in source

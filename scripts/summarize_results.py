@@ -36,6 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--diagnostics", type=Path)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/pilot-r16.yaml"),
+        help="pilot configuration used to validate bounded measured evidence",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resamples", type=int, default=10_000)
@@ -89,7 +95,12 @@ def _evidence_state(rows: Sequence[Mapping[str, object]]) -> str:
     return next(iter(states))
 
 
-def _manifest(path: Path | None, output: Path, summary: ResultSummary) -> Mapping[str, object]:
+def _manifest(
+    path: Path | None,
+    output: Path,
+    summary: ResultSummary,
+    pilot_config_file: Path = Path("configs/pilot-r16.yaml"),
+) -> Mapping[str, object]:
     combined_path = output / "evidence-manifest.json"
     base_path = output / "base-manifest.json"
     adapter_path = output / f"{summary.adapter_condition}-manifest.json"
@@ -109,6 +120,7 @@ def _manifest(path: Path | None, output: Path, summary: ResultSummary) -> Mappin
             _load_json(adapter_path),
             summary,
             training_manifest=training_manifest,
+            pilot_config_file=pilot_config_file,
         )
         stored_path = path or combined_path
         if stored_path.is_file() and canonical_json(_load_json(stored_path)) != canonical_json(
@@ -253,8 +265,8 @@ def _verify_existing(args: argparse.Namespace) -> int:
         )
         if recomputed != summary:
             raise ValueError("existing metrics do not match recomputed source artifacts")
-    manifest = _manifest(args.manifest, args.output, summary)
-    rendered = render_report(summary, manifest)
+    manifest = _manifest(args.manifest, args.output, summary, args.config)
+    rendered = render_report(summary, manifest, pilot_config_file=args.config)
     if report_path.read_text(encoding="utf-8") != rendered:
         raise ValueError("existing report does not match validated metrics and manifest")
     metrics_csv_path = args.output / "metrics.csv"
@@ -285,8 +297,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         resamples=args.resamples,
         review_seed=review_seed,
     )
-    manifest = _manifest(args.manifest, args.output, summary)
-    report = render_report(summary, manifest)
+    manifest = _manifest(args.manifest, args.output, summary, args.config)
+    report = render_report(summary, manifest, pilot_config_file=args.config)
 
     args.output.mkdir(parents=True, exist_ok=True)
     if summary.evidence_state in {"8b_gpu_measured", "8b_pilot_measured"}:

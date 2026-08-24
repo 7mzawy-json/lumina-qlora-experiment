@@ -187,7 +187,14 @@ from lumina_experiment.gpu import (
 
 frozen_hash = verify_frozen_evaluation()
 dataset_hashes = verify_frozen_dataset_split(Path("data/processed"))
-pilot_config = load_experiment_config(Path("configs/pilot-r16.yaml"))
+RUN_LR_DIAGNOSTIC = False
+standard_config_path = Path("configs/pilot-r16.yaml")
+diagnostic_config_path = Path("configs/pilot-r16-lr1e4.yaml")
+pilot_config_path = (
+    diagnostic_config_path if RUN_LR_DIAGNOSTIC else standard_config_path
+)
+pilot_config = load_experiment_config(pilot_config_path)
+pilot_result_dir = Path("results/raw") / pilot_config.name
 smoke_config = load_experiment_config(Path("configs/smoke.yaml"))
 pilot_model_revision = resolve_hub_revision(pilot_config.model_id)
 smoke_model_revision = resolve_hub_revision(smoke_config.model_id)
@@ -197,6 +204,8 @@ print(
         "evaluation_hash": frozen_hash,
         "dataset_hashes": dataset_hashes,
         "model_revision": pilot_model_revision,
+        "pilot_config": pilot_config.name,
+        "learning_rate": pilot_config.learning_rate,
     }
 )"""
         ),
@@ -281,7 +290,7 @@ pilot_run = train_adapter(
 )
 if pilot_run.selected_checkpoint is None or not pilot_run.validation_selection:
     raise RuntimeError("training did not produce validation-only checkpoint selection evidence")
-pilot_run_path = Path("results/raw/pilot-r16/run-manifest.json")
+pilot_run_path = pilot_result_dir / "run-manifest.json"
 pilot_run_path.parent.mkdir(parents=True, exist_ok=True)
 pilot_run_path.write_text(canonical_json(pilot_run) + "\\n", encoding="utf-8")"""
         ),
@@ -297,7 +306,7 @@ adapted_generations = generate_condition(
 )
 if [item.case_id for item in base_generations] != [item.case_id for item in adapted_generations]:
     raise RuntimeError("base and adapter generation case order differs")
-export_generations(adapted_generations, Path("results/raw/pilot-r16/generations.jsonl"))
+export_generations(adapted_generations, pilot_result_dir / "generations.jsonl")
 pilot_condition = build_condition_manifest(
     pilot_config,
     adapted_generations,
@@ -308,12 +317,12 @@ pilot_condition = build_condition_manifest(
     package_versions=package_versions,
     adapter_hash=pilot_run.artifacts["adapter_sha256"] or None,
 )
-export_condition_manifest(pilot_condition, Path("results/raw/pilot-r16/manifest.json"))"""
+export_condition_manifest(pilot_condition, pilot_result_dir / "manifest.json")"""
         ),
         nbformat.v4.new_markdown_cell(HEADINGS[7]),
         _code(
             """os.environ.pop("HF_TOKEN", None)
-archive_path = Path("/content/lumina-results.zip")
+archive_path = Path("/content") / f"lumina-{pilot_config.name}-results.zip"
 with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
     for candidate in sorted(Path("results").rglob("*")):
         if not candidate.is_file():

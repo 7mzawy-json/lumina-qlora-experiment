@@ -551,6 +551,7 @@ def combine_condition_manifests(
     summary: ResultSummary,
     *,
     training_manifest: Mapping[str, object] | None = None,
+    pilot_config_file: Path = PILOT_CONFIG_FILE,
 ) -> dict[str, object]:
     """Combine Task 8 condition manifests into the report evidence contract."""
     base = ConditionManifest.from_dict(base_manifest)
@@ -605,19 +606,24 @@ def combine_condition_manifests(
     }
     if training_manifest is not None:
         combined["training_manifest"] = dict(training_manifest)
-    validate_evidence(summary, combined)
+    validate_evidence(summary, combined, pilot_config_file=pilot_config_file)
     return combined
 
 
-def _validate_pilot_evidence(summary: ResultSummary, manifest: Mapping[str, object]) -> None:
+def _validate_pilot_evidence(
+    summary: ResultSummary,
+    manifest: Mapping[str, object],
+    *,
+    pilot_config_file: Path,
+) -> None:
     if not TRUSTED_FREEZE_FILE.is_file():
         raise ValueError(f"evaluation freeze file does not exist: {TRUSTED_FREEZE_FILE}")
     frozen_hash = TRUSTED_FREEZE_FILE.read_text(encoding="utf-8").strip()
     if manifest.get("evaluation_hash") != frozen_hash:
         raise ValueError("evaluation hash does not match FROZEN.sha256")
 
-    config = load_experiment_config(PILOT_CONFIG_FILE)
-    if config.name != "pilot-r16" or config.evidence_state != "8b_pilot_measured":
+    config = load_experiment_config(pilot_config_file)
+    if config.evidence_state != "8b_pilot_measured":
         raise ValueError("pilot configuration identity does not match measured evidence")
     if config.eval_case_limit != 24:
         raise ValueError("pilot configuration must select exactly 24 evaluation cases")
@@ -782,7 +788,7 @@ def _validate_pilot_evidence(summary: ResultSummary, manifest: Mapping[str, obje
     if training.evaluation_hash != frozen_hash:
         raise ValueError("training evaluation hash does not match FROZEN.sha256")
     if training.config_hash != _config_hash(config):
-        raise ValueError("training configuration hash does not match pilot-r16.yaml")
+        raise ValueError("training configuration hash does not match the selected pilot config")
     selected_datasets = _limit_dataset_split(config, load_frozen_dataset_split(FROZEN_DATASET_DIR))
     if training.dataset_hash != _dataset_hash(selected_datasets):
         raise ValueError("training dataset hash does not match the deterministic pilot mixture")
@@ -803,12 +809,21 @@ def _validate_pilot_evidence(summary: ResultSummary, manifest: Mapping[str, obje
         raise ValueError("training adapter hash does not match inference adapter hash")
 
 
-def validate_evidence(summary: ResultSummary, manifest: Mapping[str, object]) -> None:
+def validate_evidence(
+    summary: ResultSummary,
+    manifest: Mapping[str, object],
+    *,
+    pilot_config_file: Path = PILOT_CONFIG_FILE,
+) -> None:
     manifest_state = manifest.get("evidence_state")
     if manifest_state != summary.evidence_state:
         raise ValueError("summary and manifest evidence states do not match")
     if summary.evidence_state == "8b_pilot_measured":
-        _validate_pilot_evidence(summary, manifest)
+        _validate_pilot_evidence(
+            summary,
+            manifest,
+            pilot_config_file=pilot_config_file,
+        )
         return
     if summary.evidence_state != "8b_gpu_measured":
         return
@@ -1001,8 +1016,13 @@ def _metric_table(metrics: Mapping[str, float], intervals: Mapping[str, Interval
     return lines
 
 
-def render_report(summary: ResultSummary, manifest: Mapping[str, object]) -> str:
-    validate_evidence(summary, manifest)
+def render_report(
+    summary: ResultSummary,
+    manifest: Mapping[str, object],
+    *,
+    pilot_config_file: Path = PILOT_CONFIG_FILE,
+) -> str:
+    validate_evidence(summary, manifest, pilot_config_file=pilot_config_file)
     decision = evaluate_success(summary)
     directional_pilot = summary.evidence_state == "8b_pilot_measured"
     lines = [

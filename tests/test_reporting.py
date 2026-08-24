@@ -210,6 +210,23 @@ def valid_pilot_manifest() -> dict[str, object]:
     }
 
 
+def diagnostic_pilot_summary() -> ResultSummary:
+    return replace(pilot_summary(), adapter_condition="pilot-r16-lr1e4")
+
+
+def valid_diagnostic_pilot_manifest() -> dict[str, object]:
+    manifest = valid_pilot_manifest()
+    manifest["conditions"]["adapter"]["condition"] = "pilot-r16-lr1e4"
+    manifest["training_manifest"].update(
+        {
+            "run_id": "pilot-r16-lr1e4-1",
+            "config_hash": "f0cc7260df6bce63215aa691be1883222c29df79b02b9031d715a0b57a923241",
+            "selected_checkpoint": "artifacts/checkpoints/pilot-r16-lr1e4/checkpoint-16",
+        }
+    )
+    return manifest
+
+
 def scored_case_ids() -> list[str]:
     return [
         case.id
@@ -498,6 +515,20 @@ def test_directional_pilot_evidence_rejects_training_manifest_drift() -> None:
 
     with pytest.raises(ValueError, match="training dataset hash"):
         validate_evidence(pilot_summary(), drifted)
+
+
+def test_directional_pilot_accepts_explicit_matching_diagnostic_config() -> None:
+    summary = diagnostic_pilot_summary()
+    manifest = valid_diagnostic_pilot_manifest()
+
+    try:
+        validate_evidence(
+            summary,
+            manifest,
+            pilot_config_file=Path("configs/pilot-r16-lr1e4.yaml"),
+        )
+    except TypeError as error:
+        pytest.fail(f"explicit pilot configuration is not supported: {error}")
 
 
 def test_directional_pilot_manifest_is_derived_from_all_source_manifests(

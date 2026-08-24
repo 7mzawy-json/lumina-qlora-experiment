@@ -32,6 +32,18 @@ def test_pilot_config_is_time_bounded_and_declares_directional_evidence() -> Non
     assert config.evidence_state == "8b_pilot_measured"
 
 
+def test_lr_diagnostic_changes_only_learning_rate_and_run_identity() -> None:
+    pilot = load_experiment_config(Path("configs/pilot-r16.yaml"))
+    diagnostic = load_experiment_config(Path("configs/pilot-r16-lr1e4.yaml"))
+
+    assert diagnostic.learning_rate == pytest.approx(0.0001)
+    assert diagnostic.name == "pilot-r16-lr1e4"
+    assert diagnostic.output_dir == "artifacts/checkpoints/pilot-r16-lr1e4"
+    assert pilot.without("name", "learning_rate", "output_dir") == diagnostic.without(
+        "name", "learning_rate", "output_dir"
+    )
+
+
 def test_ablation_changes_only_identity_rank_and_alpha() -> None:
     primary = load_experiment_config(Path("configs/primary-r16.yaml"))
     ablation = load_experiment_config(Path("configs/ablation-r8.yaml"))
